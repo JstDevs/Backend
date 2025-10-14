@@ -1,0 +1,1 @@
+node_modules\.bin\sequelize-auto -o "./models1" -d BLS_Accounting_Duenas -h localhost -u sa -p 1433 -x YourPass123@ -e mysql  --caseModel p --caseFile c
