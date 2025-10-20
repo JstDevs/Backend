@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const router = express.Router();
 const db = require('../config/database'); 
 const DocumentApprovers = db.DocumentApprovers;
+const { calculatePageCount } = require('../utils/calculatePageCount');
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
 const bluritout=require("../utils/blurFile")
@@ -446,6 +447,11 @@ Description
       return isNaN(parsed.getTime()) ? null : parsed;
     };
 
+    // Calculate page count for new document
+    const documentBuffer = buffer ? buffer : record.DataImage;
+    const mimeType = req.file ? req.file.mimetype : (record.DataType ? `application/${record.DataType}` : 'application/octet-stream');
+    const pageCount = await calculatePageCount(documentBuffer, mimeType);
+
     // Update record
     await record.update({
       Active:false
@@ -489,6 +495,7 @@ Description
       Expiration: expirationChecked,
       Confidential: confidentialChecked,
       ...(expirationChecked&&{ExpirationDate:new Date(expdate)}),
+      PageCount: pageCount,
       Remarks: remarks,
       FileDescription,
       Description
@@ -810,6 +817,11 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
       return isNaN(parsed.getTime()) ? null : parsed;
     };
     const newexpdate=expdate?expdate:new Date()+ 8541*30*24*60*60*1000
+    
+    // Calculate page count
+    const mimeType = req.file ? req.file.mimetype : 'application/octet-stream';
+    const pageCount = await calculatePageCount(buffer, mimeType);
+    
     // Create new document
     const newDocument = await Documents.create({
       DepartmentId: parseInt(dep),
@@ -845,6 +857,7 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
       publishing_status:publishing_status,
       Active: true,
       DataType: req.file ? req.file.mimetype?(req.file.mimetype.split("/")[1]):"" : 'octet-stream',
+      PageCount: pageCount,
       FileDescription,
       Description
     });
@@ -1133,6 +1146,7 @@ router.get('/documents/:userid', async (req, res) => {
     const approvers=await db.DocumentApprovers.findAll({})
     const restrictionIds = restrictions.map(r => r.DocumentID);
     console.log("restrictions",restrictions)
+    // ini long
     const documents = await db.Documents.findAndCountAll({
       where: whereClause,
       // include: [
@@ -1214,6 +1228,8 @@ router.get('/documents/:userid', async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
+
+  // res.json({data:"hello"})
 });
 
 router.get('/alldocuments_old/:userid', async (req, res) => {

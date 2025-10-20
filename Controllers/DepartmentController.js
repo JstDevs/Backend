@@ -142,8 +142,6 @@ router.get('/', requireAuth, async (req, res) => {
     include:[
       {
         model: db.SubDepartment,
-       
-       
       }
     ]
   });

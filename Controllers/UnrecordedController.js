@@ -138,7 +138,7 @@ router.get('/documents/unrecorded/:dep/:subdep/:userid', async (req, res) => {
     const documents = await Document.findAll({
       where:{DepartmentId:dep,SubDepartmentId:subdep,Active:true},
       order: [['createdDate', 'DESC']],
-      attributes: { exclude: ['DataImage'] }
+      attributes: { exclude: ['DataImage'], include: ['PageCount'] }
     });
 
     const unrecordedfields=await db.OCRDocumentReadFields.findAll({})
@@ -467,7 +467,7 @@ router.get('/documents/search/:linkId', async (req, res) => {
         text9: '',
         text10: ''
       },
-      order: [['createdDate', 'DESC']]
+      order: [['createdDate', 'DESC']], attributes: ['ID', 'FileName', 'FileDescription', 'PageCount', /* other fields you need */]
     });
 
     res.json({

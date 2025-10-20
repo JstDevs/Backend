@@ -37,6 +37,18 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
   // dialect: 'mssql', // Use 'mssql' for Microsoft SQL Server
   // dialect: 'mysql', // Use 'mysql' for MySQL
   port: process.env.DB_PORT || 3306, // Default port for MSSQL is 1433
+
+   pool: {
+        // Maximum number of connection in pool
+        max: 10, 
+        // Minimum number of connection in pool
+        min: 0, 
+        // Maximum time (in ms) that pool will try to get connection before throwing error
+        acquire: 30000, 
+        // Maximum time (in ms) a connection can be idle before being released.
+        // Set this to a value LESS THAN the MySQL server's wait_timeout.
+        idle: 15000 
+    },
   dialectOptions: {
     // instanceName: 'SQLEXPRESS', // 🟢 THIS IS REQUIRED
     options: {

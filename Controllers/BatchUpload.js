@@ -18,6 +18,7 @@ const pdf = require('pdf-parse');
 const sharp = require('sharp');
 const os = require('os');
 const generateLinkID = require("../utils/generateID")
+const { calculatePageCount } = require('../utils/calculatePageCount');
 const multer = require('multer');
 // const storage = multer.memoryStorage();
 const storage = multer.diskStorage({
@@ -367,6 +368,21 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                 
 
                 const linkId = existingDoc ? existingDoc.LinkID : generateLinkID();
+                
+                // Calculate page count from the actual PDF file
+                let pageCount = 0;
+                if (pdfExists && pdfFilePath) {
+                    try {
+                        const pdfBuffer = await fs.readFile(pdfFilePath);
+                        pageCount = await calculatePageCount(pdfBuffer, 'application/pdf');
+                    } catch (error) {
+                        logger.warn(`Error calculating page count for ${fileName}: ${error.message}`);
+                        pageCount = rowData['Page Count'] || 0; // Fallback to Excel value
+                    }
+                } else {
+                    pageCount = rowData['Page Count'] || 0; // Use Excel value if no PDF
+                }
+                
                 const documentData = {
                     LinkID: linkId,
                     FileName: fileName,
@@ -374,7 +390,7 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                     Expiration: rowData['Expiration'] === true || rowData['Expiration'] === 1,
                     ExpirationDate: rowData['Expiration Date'] ? new Date(rowData['Expiration Date']) : null,
                     Confidential: rowData['Confidential'] === true || rowData['Confidential'] === 1,
-                    'Page Count': rowData['Page Count'] || 0,
+                    'Page Count': pageCount,
                     Remarks: rowData['Remarks'] || '',
                     Active: true,
                     'Created By': rowData['Created By'] || 'System',
@@ -641,6 +657,17 @@ router.get('/process-excel-old', async (req, res) => {
                     });
                     const linkId=existingDoc ? existingDoc.LinkID : generateLinkID(); // Generate new Link ID if not found
                     // //console.log("he1re 7","existingDoc",existingDoc)
+                    // Calculate page count from existing document if available
+                    let pageCount = rowData['Page Count'] || 0;
+                    if (existingDoc && existingDoc.DataImage) {
+                        try {
+                            pageCount = await calculatePageCount(existingDoc.DataImage, 'application/pdf');
+                        } catch (error) {
+                            logger.warn(`Error calculating page count for ${fileName}: ${error.message}`);
+                            // Keep the Excel value as fallback
+                        }
+                    }
+                    
                     // Prepare data for Document model
                     const documentData = {
                         // ID: existingDoc ? existingDoc?.ID : strId, // Use existing ID or new one
@@ -670,7 +697,7 @@ router.get('/process-excel-old', async (req, res) => {
                         Expiration: rowData['Expiration'] === true || rowData['Expiration'] === 1,
                         'ExpirationDate': rowData['Expiration Date'] ? new Date(rowData['Expiration Date']) : null,
                         Confidential: rowData['Confidential'] === true || rowData['Confidential'] === 1,
-                        'Page Count': rowData['Page Count'] || 0,
+                        'Page Count': pageCount,
                         Remarks: rowData['Remarks'] ? String(rowData['Remarks']) : '',
                         Active: true,
                         'Created By': rowData['Created By'] ? String(rowData['Created By']) : 'System',
