@@ -98,7 +98,8 @@ let models = [
   require("../models/OCRDocumentReadFields"),
   require("../models/Useruseraccess"),
   require("../models/newFeatures/DocumentApprovers"),
-  require("../models/newFeatures/approvalmatrix")
+  require("../models/newFeatures/approvalmatrix"),
+  require("../models/newFeatures/AuditActivities")
   // require('./yourModelFile') — add models here
 ];
 

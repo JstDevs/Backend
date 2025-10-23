@@ -24,6 +24,7 @@ const unrecorded = require('./Controllers/UnrecordedController.js'); // Assuming
 const AllocationController = require('./Controllers/AllocationController.js'); // Assuming you have an AllocationController for allocation of documents
 const BatchUpload= require('./Controllers/BatchUpload.js'); // Assuming you have a BatchUploadController for batch uploads
 const ApprovalMatrix= require('./Controllers/ApprovalMatrix.js');
+const AuditController = require('./Controllers/AuditController.js');
 var app = express();
 // const upload = multer({ dest: 'uploads/' });
 // view engine setup
@@ -103,6 +104,7 @@ app.use('/ocr', unrecorded); // Add your OCR processing routes
 app.use('/allocation', AllocationController); // Add your allocation routes
 app.use('/batchUpload', BatchUpload); // Add your batch upload routes
 app.use('/approvalMatrix', ApprovalMatrix); // Add your batch upload routes
+app.use('/audit', AuditController); // Add your audit routes
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
   next(createError(404));
