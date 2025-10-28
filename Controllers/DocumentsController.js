@@ -56,28 +56,96 @@ function buildWhereClause(search) {
 }
 
 
-async function processDocument(doc, restrictions, OCRFields, templates) {
+async function processDocument(doc, restrictions, OCRFields, templates, skipCache = false) {
   const restrictions_open_draw = restrictions.map(r => r.dataValues);
 
   const docJson = doc.toJSON();
   const timestampfocdocumentlinkid=new Date().getTime()+"_"+doc.LinkID
   
-  console.log("herer 1")
+  console.log("Processing document ID:", doc.ID, "SkipCache:", skipCache)
   const dir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
   const temppath=path.join(__dirname, `../public/images/nonredacteddocs/document_${doc.ID}`)
   const pathrelativetoserver=`document_${doc.ID}`
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (!fs.existsSync(temppath)) fs.mkdirSync(temppath, { recursive: true });
-  await clearDirectory(dir);
-  await clearDirectory(temppath);
-   // write image or pdf buffer to disk
-
-  let imageBuffer = doc.DataImage;
-  let fileUrl ;
+  
   const isRestricted = restrictions.some(r => r.DocumentID === doc.ID);
-
   const matchedField = OCRFields.find(field => field.LinkId === doc.LinkID);
   const templateId = matchedField ? matchedField.template_id : null;
+  
+  // ⚡ OPTIMIZATION: Only check cache if not forced to skip
+  if (!skipCache) {
+    // Check if images already exist (cached)
+    const existingFiles = fs.existsSync(temppath) ? fs.readdirSync(temppath) : [];
+    const hasCachedImage = existingFiles.length > 0;
+    
+    console.log("Cached image exists:", hasCachedImage, "Files:", existingFiles.length);
+
+    // ⚡ OPTIMIZATION: Early exit - if cached image exists and no restrictions, use cache
+    if (hasCachedImage && !isRestricted && !templateId) {
+      const latestFile = existingFiles.sort().reverse()[0];
+      const cachedUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+      
+      delete docJson.DataImage;
+      return {
+        ...docJson,
+        isRestricted: false,
+        filepath: cachedUrl,
+        template_id: null,
+        restrictions: []
+      };
+    }
+    
+    // ⚡ OPTIMIZATION: If cached image exists, use it (for restriction checking)
+    if (hasCachedImage) {
+      const latestFile = existingFiles.sort().reverse()[0];
+      
+      // Check if redacted version exists
+      const redactedFiles = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+      
+      let fileUrl = '';
+      if (isRestricted && redactedFiles.length > 0) {
+        const redactedFile = redactedFiles.sort().reverse()[0];
+        fileUrl = `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${redactedFile}`;
+      } else {
+        fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+      }
+      
+      delete docJson.DataImage;
+      return {
+        ...docJson,
+        isRestricted,
+        filepath: fileUrl,
+        template_id: templateId,
+        restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
+      };
+    }
+  }
+
+  // Only process if we need to generate new images
+  // ⚡ Check if DataImage is available (might be excluded in some queries)
+  if (!doc.DataImage) {
+    console.error('DataImage not available for document ID:', doc.ID);
+    // Return cached URL if available
+    const existingFiles = fs.existsSync(temppath) ? fs.readdirSync(temppath) : [];
+    if (existingFiles.length > 0) {
+      const latestFile = existingFiles.sort().reverse()[0];
+      const cachedUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+      delete docJson.DataImage;
+      return {
+        ...docJson,
+        isRestricted,
+        filepath: cachedUrl,
+        template_id: templateId,
+        restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
+      };
+    }
+    // If no cache and no DataImage, return error
+    throw new Error(`No image data available and no cached images for document ID: ${doc.ID}`);
+  }
+  
+  let imageBuffer = doc.DataImage;
+  let fileUrl = '';
 
   // if (doc.DataType === '.pdf' || doc.DataType === 'pdf') {
   //   const imageConversion = await convertPdfBufferToImages(doc.DataImage,temppath,timestampfocdocumentlinkid);
@@ -152,16 +220,25 @@ async function processDocument(doc, restrictions, OCRFields, templates) {
     fileUrl = arethereblurRegions&&blurredFilename?`${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${blurredFilename}`:fileUrl
     // console.log("blurredFilename",blurredFilename)
   }
-console.log("fileUrl",fileUrl)
+console.log("Final fileUrl:", fileUrl, "DataImage size:", doc.DataImage?.length || 0);
+  
+  if (!fileUrl) {
+    console.error("ERROR: fileUrl is empty for document ID:", doc.ID);
+  }
+  
   delete docJson.DataImage;
 
-  return {
+  const result = {
     ...docJson,
     isRestricted,
     filepath: fileUrl,
     template_id: templateId,
     restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
   };
+  
+  console.log("Returning document with filepath:", result.filepath);
+  
+  return result;
 }
 
 
@@ -1146,55 +1223,63 @@ router.get('/documents/:userid', async (req, res) => {
     const approvers=await db.DocumentApprovers.findAll({})
     const restrictionIds = restrictions.map(r => r.DocumentID);
     console.log("restrictions",restrictions)
-    // ini long
+    
+    // ⚡ OPTIMIZATION: Don't fetch DataImage BLOB in list view
     const documents = await db.Documents.findAndCountAll({
       where: whereClause,
-      // include: [
-      //   {
-      //     model: DocumentVersionsModel,
-      //     as: 'versions',
-      //     where: { IsCurrentVersion: true },
-      //     required: false
-      //   },
-      //   {
-      //     model: DocumentCollaborationsModel,
-      //     as: 'collaborations',
-      //     where: { Active: true },
-      //     required: false
-      //   },
-      //   {
-      //     model: DocumentApprovalsModel,
-      //     as: 'approvals',
-      //     where: { Status: 'PENDING' },
-      //     required: false
-      //   }
-      // ],
+      attributes: {
+        exclude: ['DataImage'] // Skip BLOB data
+      },
       limit: parseInt(limit),
       offset: parseInt(offset),
       order: [['CreatedDate', 'DESC']]
     });
-    const newdocuments = documents.rows.map(async doc => {
+    
+    // ⚡ OPTIMIZATION: Batch fetch all versions in ONE query
+    const linkIds = documents.rows.map(doc => doc.LinkID);
+    const allVersions = await db.DocumentVersions.findAll({
+      where: { LinkID: { [Op.in]: linkIds } },
+      order: [['ModificationDate', 'DESC']],
+      raw: true
+    });
+    
+    // Create version map for O(1) lookup
+    const versionMap = {};
+    allVersions.forEach(version => {
+      if (!versionMap[version.LinkID]) {
+        versionMap[version.LinkID] = version;
+      }
+    });
+    
+    // ⚡ OPTIMIZATION: Batch fetch all approvals in ONE query
+    const allApprovals = await db.DocumentApprovals.findAll({
+      where: { 
+        LinkID: { [Op.in]: linkIds },
+        RequestedBy: userid
+      },
+      raw: true
+    });
+    
+    const approvalMap = {};
+    allApprovals.forEach(approval => {
+      if (!approvalMap[approval.LinkID]) {
+        approvalMap[approval.LinkID] = approval;
+      }
+    });
+    
+    const newdocuments = documents.rows.map(doc => {
       const LinkID=doc.LinkID
-      const versions= await db.DocumentVersions.findOne({
-        where: { LinkID: LinkID },
-        order: [['ModificationDate', 'DESC']]
-      });
-     const doc_under_approvalof = approvers.find(e =>
+      const versions = versionMap[LinkID];
+      const doc_under_approvalof = approvers.find(e =>
         e.DepartmentId === doc.DepartmentId && e.SubDepartmentId === doc.SubDepartmentId
       );
-      const approval=await db.DocumentApprovals.findOne({
-        where:{
-          LinkID:doc.LinkID,
-          RequestedBy:userid
-        }
-      })
+      const approval = approvalMap[LinkID];
       const shoulduserbeallowedtoapproverequest=doc_under_approvalof?true:false
       const isRestricted = restrictionIds.includes(doc.ID+"");
       const newdoc=JSON.parse(JSON.stringify(doc))
-      delete newdoc.DataImage
       newdoc.approval=approval
-       newdoc.approvalstatus=false
-       if(approval && approval.Status=="1"){
+      newdoc.approvalstatus=false
+      if(approval && approval.Status=="1"){
         newdoc.approvalstatus=true
       }
       return {
@@ -1205,20 +1290,19 @@ router.get('/documents/:userid', async (req, res) => {
       };
 
     })
-    Promise.all(newdocuments).then(newdocuments => {
-      res.status(200).json({
-        success: true,
-        data: {
-          documents: newdocuments,
-          pagination: {
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(documents.count / limit),
-            totalItems: documents.count,
-            itemsPerPage: parseInt(limit)
-          }
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        documents: newdocuments,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(documents.count / limit),
+          totalItems: documents.count,
+          itemsPerPage: parseInt(limit)
         }
-      });
-    })
+      }
+    });
 
   } catch (error) {
     console.error('Error fetching documents:', error);
@@ -1379,9 +1463,12 @@ router.get('/alldocuments/:userid', async (req, res) => {
     });
     const restrictedIds = restrictions.map(r => r.DocumentID);
 
-    // Fetch documents
+    // ⚡ OPTIMIZATION: Don't fetch DataImage BLOB in list view - HUGE performance gain
     const documents = await db.Documents.findAndCountAll({
       where: whereClause,
+      attributes: {
+        exclude: ['DataImage'] // 🚀 Skip BLOB data for list view
+      },
       limit: parseInt(limit),
       offset: parseInt(offset),
       order: [['CreatedDate', 'DESC']]
@@ -1391,11 +1478,65 @@ router.get('/alldocuments/:userid', async (req, res) => {
     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({ raw: true,order: [['CreatedAt', 'DESC']]}) // or 'create });
     const templates = await db.Template.findAll({ raw: true });
 
-    const processedDocs = await Promise.all(
-      documents.rows.map(async doc =>
-        await processDocument(doc, restrictions, OCRDocumentReadFields, templates)
-      )
-    );
+    // ⚡ OPTIMIZATION: Batch fetch all versions in ONE query instead of N+1
+    const linkIds = documents.rows.map(doc => doc.LinkID);
+    const allVersions = await db.DocumentVersions.findAll({
+      where: { LinkID: { [Op.in]: linkIds } },
+      order: [['ModificationDate', 'DESC']],
+      raw: true
+    });
+    
+    // Create version map for O(1) lookup
+    const versionMap = {};
+    allVersions.forEach(version => {
+      if (!versionMap[version.LinkID]) {
+        versionMap[version.LinkID] = version;
+      }
+    });
+
+    // ⚡ OPTIMIZATION: Lightweight processing for list view - no image processing
+    const processedDocs = documents.rows.map(doc => {
+      const docJson = doc.toJSON();
+      const LinkID = doc.LinkID;
+      const isRestricted = restrictedIds.includes(doc.ID + "");
+      
+      // Check if processed images already exist
+      const dir = path.join(__dirname, `../public/images/nonredacteddocs/document_${doc.ID}`);
+      const redactedDir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
+      const pathrelativetoserver = `document_${doc.ID}`;
+      
+      let fileUrl = null;
+      
+      // Try to find existing processed image
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir);
+        if (files.length > 0) {
+          const latestFile = files.sort().reverse()[0];
+          fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+        }
+      }
+      
+      // Check for redacted version if restrictions exist
+      if (isRestricted && fs.existsSync(redactedDir)) {
+        const files = fs.readdirSync(redactedDir);
+        if (files.length > 0) {
+          const latestFile = files.sort().reverse()[0];
+          fileUrl = `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${latestFile}`;
+        }
+      }
+
+      const matchedField = OCRDocumentReadFields.find(field => field.LinkId === doc.LinkID);
+      const templateId = matchedField ? matchedField.template_id : null;
+      
+      return {
+        ...docJson,
+        isRestricted,
+        filepath: fileUrl,
+        template_id: templateId,
+        versions: versionMap[LinkID] || null,
+        restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -1425,16 +1566,16 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
     const  userId  = req.user.id;
     const latestestdocument=await db.Documents.findByPk(documentId)
     const LinkID=latestestdocument.LinkID
+    // ⚡ IMPORTANT: Fetch document with DataImage for detail view
     const document = await db.Documents.findOne({
       where: { LinkID: LinkID, Active: true },
-      // include: [
-      //   { model: db.DocumentVersions, as: 'versions', required: false },
-      //   // { model: db.DocumentCollaborations, as: 'collaborations', where: { Active: true }, required: false },
-      //   // { model: db.DocumentComments, as: 'comments', where: { Active: true }, required: false },
-      //   // { model: db.DocumentApprovals, as: 'approvals', where: { Active: true }, required: false },
-      //   // { model: db.DocumentRestrictions, as: 'restrictions', where: { Active: true }, required: false }
-      // ]
+      attributes: {
+        // Include DataImage for detail view so we can process it
+      }
     });
+    
+    console.log("Document fetched:", document ? "Yes" : "No");
+    console.log("DataImage size:", document?.DataImage?.length || 0, "bytes");
    
 
     if (!document) {
@@ -1544,11 +1685,21 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
           console.log("accessforthisdoc",accessforthisdoc)
     const approvalsforusertoacceptorreject=accessforthisdoc?approvalsforthisdoc:[]
     const templates = await db.Template.findAll({ raw: true });
+    
+    // ⚡ Force processing for detail view - skip cache to regenerate images
+    console.log("Processing document for detail view, DataImage available:", !!document.DataImage);
+    console.log("Document ID:", document.ID, "Document LinkID:", document.LinkID);
     const processedDocs = await Promise.all(
       [document].map(async doc =>
-        await processDocument(doc, restrictions, OCRDocumentReadFields, templates)
+        await processDocument(doc, restrictions, OCRDocumentReadFields, templates, true)
       )
     );
+    
+    console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
+      if (key === 'DataImage') return '[BLOB DATA REMOVED]';
+      return value;
+    }));
+    console.log("Filepath returned:", processedDocs[0]?.filepath);
     
     const docwith={
       document:processedDocs,
