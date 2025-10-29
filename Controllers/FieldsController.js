@@ -9,8 +9,13 @@ const db = require('../config/database');
 router.get('/by-link/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { includeInactive } = req.query;
+    const where = { LinkID: id };
+    if (includeInactive !== 'true') {
+      where.Active = true;
+    }
     const fields = await db.Fields.findAll({
-      where: { LinkID: id },
+      where,
       order: [['FieldNumber', 'ASC']]
     });
     res.json({ status: true, data: fields });
@@ -23,13 +28,16 @@ router.get('/by-link/:id', async (req, res) => {
 // Query parameter: /fields/by-link?linkId=123
 router.get('/by-link', async (req, res) => {
   try {
-    const { linkId } = req.query;
+    const { linkId, includeInactive } = req.query;
     if (!linkId) {
       return res.status(400).json({ status: false, error: 'Missing linkId parameter' });
     }
-    
+    const where = { LinkID: linkId };
+    if (includeInactive !== 'true') {
+      where.Active = true;
+    }
     const fields = await db.Fields.findAll({
-      where: { LinkID: linkId },
+      where,
       order: [['FieldNumber', 'ASC']]
     });
     res.json({ status: true, data: fields });
