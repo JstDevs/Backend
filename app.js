@@ -25,6 +25,7 @@ const AllocationController = require('./Controllers/AllocationController.js'); /
 const BatchUpload= require('./Controllers/BatchUpload.js'); // Assuming you have a BatchUploadController for batch uploads
 const ApprovalMatrix= require('./Controllers/ApprovalMatrix.js');
 const AuditController = require('./Controllers/AuditController.js');
+const FieldsController = require('./Controllers/FieldsController.js');
 var app = express();
 // const upload = multer({ dest: 'uploads/' });
 // view engine setup
@@ -105,21 +106,7 @@ app.use('/allocation', AllocationController); // Add your allocation routes
 app.use('/batchUpload', BatchUpload); // Add your batch upload routes
 app.use('/approvalMatrix', ApprovalMatrix); // Add your batch upload routes
 app.use('/audit', AuditController); // Add your audit routes
-
-// Fields routes at root level
-app.get('/fields/by-link/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const fields = await db.OCRDocumentReadFields.findAll({
-      where: { LinkId: id },
-      order: [['createdAt', 'DESC']]
-    });
-    res.json({status: true, data: fields});
-  } catch (error) {
-    console.error('Error fetching fields by link:', error);
-    res.status(500).json({ status: false, error: 'Failed to fetch fields by link' });
-  }
-});
+app.use('/fields', FieldsController); // Add your fields routes
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {

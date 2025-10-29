@@ -775,4 +775,21 @@ router.delete('/delete-existing-user', async (req, res) => {
 });
 
 
+// Return available fields from Fields table for allocation
+// Route shape expected by frontend: /allocation/available-fields/:docTypeId/:linkId
+router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
+    try {
+        const { linkId } = req.params;
+        const fields = await Fields.findAll({
+            where: { LinkID: linkId },
+            order: [['FieldNumber', 'ASC']]
+        });
+        return res.json({ status: true, data: fields });
+    } catch (error) {
+        console.error('Error fetching available fields:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch available fields' });
+    }
+});
+
+
 module.exports = router;
