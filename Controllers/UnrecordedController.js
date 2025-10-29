@@ -565,6 +565,21 @@ router.get('/fields', async (req, res) => {
   }
 });
 
+// GET fields by LinkId
+// router.get('/fields/by-link/:id', async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const fields = await db.OCRDocumentReadFields.findAll({
+//       where: { LinkId: id },
+//       order: [['createdAt', 'DESC']]
+//     });
+//     res.json({status: true, data: fields});
+//   } catch (error) {
+//     console.error('Error fetching fields by link:', error);
+//     res.status(500).json({ status: false, error: 'Failed to fetch fields by link' });
+//   }
+// });
+
 // GET a single field by ID
 router.get('/fields/:id', async (req, res) => {
   try {

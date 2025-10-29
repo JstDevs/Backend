@@ -9,7 +9,7 @@ const multer=require("multer")
 const cors = require('cors');
 const fs = require('fs');
 const Tesseract = require('tesseract.js');
-require("./config/database.js"); // Ensure this path is correct based on your project structure
+const db = require("./config/database.js"); // Ensure this path is correct based on your project structure
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 const usersRoutes = require('./Controllers/UsersController.js');
@@ -105,6 +105,22 @@ app.use('/allocation', AllocationController); // Add your allocation routes
 app.use('/batchUpload', BatchUpload); // Add your batch upload routes
 app.use('/approvalMatrix', ApprovalMatrix); // Add your batch upload routes
 app.use('/audit', AuditController); // Add your audit routes
+
+// Fields routes at root level
+app.get('/fields/by-link/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const fields = await db.OCRDocumentReadFields.findAll({
+      where: { LinkId: id },
+      order: [['createdAt', 'DESC']]
+    });
+    res.json({status: true, data: fields});
+  } catch (error) {
+    console.error('Error fetching fields by link:', error);
+    res.status(500).json({ status: false, error: 'Failed to fetch fields by link' });
+  }
+});
+
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
   next(createError(404));
