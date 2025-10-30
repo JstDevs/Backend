@@ -79,7 +79,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     const existingFiles = fs.existsSync(temppath) ? fs.readdirSync(temppath) : [];
     const hasCachedImage = existingFiles.length > 0;
     
-    console.log("Cached image exists:", hasCachedImage, "Files:", existingFiles.length);
+    // console.log("Cached image exists:", hasCachedImage, "Files:", existingFiles.length);
 
     // ⚡ OPTIMIZATION: Early exit - if cached image exists and no restrictions, use cache
     if (hasCachedImage && !isRestricted && !templateId) {
@@ -195,7 +195,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
 
 
   // return
-  console.log("templateId",templateId)
+  // console.log("templateId",templateId)
   if (templateId) {
     const template = templates.find(t => t.ID == templateId);
     const templateFields = template?.fields ? JSON.parse(template.fields) : [];
@@ -207,7 +207,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     // Merge both restriction type arrays
     const mergedArray_blur = [...restrictions_open_draw, ...blurRegions];
 
-    console.log(mergedArray_blur);
+    // console.log(mergedArray_blur);
     const arethereblurRegions=blurRegions.length
     // console.log("arethereblurRegions",arethereblurRegions)
     let blurredFilename = undefined
@@ -220,7 +220,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     fileUrl = arethereblurRegions&&blurredFilename?`${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${blurredFilename}`:fileUrl
     // console.log("blurredFilename",blurredFilename)
   }
-console.log("Final fileUrl:", fileUrl, "DataImage size:", doc.DataImage?.length || 0);
+// console.log("Final fileUrl:", fileUrl, "DataImage size:", doc.DataImage?.length || 0);
   
   if (!fileUrl) {
     console.error("ERROR: fileUrl is empty for document ID:", doc.ID);
@@ -1222,7 +1222,7 @@ router.get('/documents/:userid', async (req, res) => {
     }catch(e){}
     const approvers=await db.DocumentApprovers.findAll({})
     const restrictionIds = restrictions.map(r => r.DocumentID);
-    console.log("restrictions",restrictions)
+    // console.log("restrictions",restrictions)
     
     // ⚡ OPTIMIZATION: Don't fetch DataImage BLOB in list view
     const documents = await db.Documents.findAndCountAll({
@@ -1337,7 +1337,7 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
       },
       raw:true
     })
-    console.log("restr",restrictions)
+    // console.log("restr",restrictions)
     const restrictionIds = restrictions.map(r => r.DocumentID);
     // console.log("restrictions",restrictions)
     const documents = await db.Documents.findAndCountAll({
@@ -1355,7 +1355,7 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
     const templatemodels=await db.Template.findAll({raw:true})
     const newdocuments = documents.rows.map(async doc => {
        const buffer = doc.DataImage; // e.g., from req.file.buffer or a DB BLOB
-        console.log("doc",doc)
+        // console.log("doc",doc)
         // Ensure the uploads/temp2 directory exists
         const dir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
         const filepathrelativetoserver=`document_${doc.ID}`
@@ -1596,7 +1596,7 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
       where: { LinkID: LinkID },
       raw :true    });
-      console.log("OCRDocumentReadFields",OCRDocumentReadFields)
+      // console.log("OCRDocumentReadFields",OCRDocumentReadFields)
     const collaborations = await db.DocumentCollaborations.findAll({
       where: { LinkID: LinkID },
       include: [
@@ -1643,7 +1643,7 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
     });
     const updatedArray = OCRDocumentReadFields.map(item => {
       const match = restrictions.find(el => el.Field === item.Field);
-      console.log("match",match,"item",item)
+      // console.log("match",match,"item",item)
       const newitem=JSON.parse(JSON.stringify(item));
       if(match){
         newitem.Restricted = true
@@ -1695,10 +1695,10 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
       )
     );
     
-    console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
-      if (key === 'DataImage') return '[BLOB DATA REMOVED]';
-      return value;
-    }));
+    // console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
+    //   if (key === 'DataImage') return '[BLOB DATA REMOVED]';
+    //   return value;
+    // }));
     console.log("Filepath returned:", processedDocs[0]?.filepath);
     
     const docwith={
