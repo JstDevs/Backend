@@ -413,7 +413,9 @@ router.post('/add-user', requireAuth, async (req, res) => {
         const {
             depid, subdepid, userid,
             View = false, Add = false, Edit = false,
-            Delete = false, Print = false, Confidential = false,fields
+            Delete = false, Print = false, Confidential = false,
+            Comment = false, Collaborate = false, Finalize = false, Masking = false,
+            fields
         } = req.body;
             const existing = await db.AssignSubDepartment.findOne({
                         where: {
@@ -457,7 +459,11 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 Edit: Edit,
                 Delete: Delete,
                 Print: Print,
-                Confidential: Confidential
+                Confidential: Confidential,
+                Comment: Comment,
+                Collaborate: Collaborate,
+                Finalize: Finalize,
+                Masking: Masking
             }, {
                 where: { LinkID: linkid, UserID: userid }
             });
@@ -472,6 +478,10 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 Delete: Delete,
                 Print: Print,
                 Confidential: Confidential,
+                Comment: Comment,
+                Collaborate: Collaborate,
+                Finalize: Finalize,
+                Masking: Masking,
                 Active: true,
                 CreatedBy: createdBy,
                 CreatedDate: createdDate
@@ -514,7 +524,7 @@ router.get('/edit-user', async (req, res) => {
 router.post('/edit-user', async (req, res) => {
     try {
         const { userID, linkid
-            ,view, add, edit, delete: deleteAccess, print, confidential,
+            ,view, add, edit, delete: deleteAccess, print, confidential, comment, collaborate, finalize, masking
 
 
          } = req.body;
@@ -532,7 +542,11 @@ router.post('/edit-user', async (req, res) => {
                 Edit: edit,
                 Delete: deleteAccess,
                 Print: print,
-                Confidential: confidential
+                Confidential: confidential,
+                Comment: comment,
+                Collaborate: collaborate,
+                Finalize: finalize,
+                Masking: masking
             }, {
                 where: { LinkID: linkid, UserID: userID }
             });

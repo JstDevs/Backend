@@ -35,6 +35,22 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull: false
     },
+    Comment: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false
+    },
+    Collaborate: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false
+    },
+    Finalize: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false
+    },
+    Masking: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false
+    },
     Active: {
       type: DataTypes.BOOLEAN,
       allowNull: false

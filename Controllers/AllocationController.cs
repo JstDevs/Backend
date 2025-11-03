@@ -369,6 +369,11 @@ namespace DMS.Controllers
             bool delete = Request.Form["Delete"] == "true";
             bool print = Request.Form["Print"] == "true";
             bool confidential = Request.Form["Confidential"] == "true";
+            bool comment = Request.Form["Comment"] == "true";
+            bool collaborate = Request.Form["Collaborate"] == "true";
+            bool finalize = Request.Form["Finalize"] == "true";
+            bool masking = Request.Form["Masking"] == "true";
+
             var createdBy = HttpContext.Session.GetString(SessionKeyName);
             DateTime createdDate = DateTime.Now;
 
@@ -380,13 +385,13 @@ namespace DMS.Controllers
 
             if (results.Count > 0)
             {
-                sql = "UPDATE [Document Access] SET Active = {8}, [View] = {2}, [Add] = {3}, [Edit] = {4}, [Delete] = {5}, [Print] = {6}, Confidential = {7} WHERE [Link ID] = {0} AND [User ID] = {1}";
-                dataContext.Database.ExecuteSqlRaw(sql, linkid, userid, view, add, edit, delete, print, confidential, 1);
+                sql = "UPDATE [Document Access] SET Active = {8}, [View] = {2}, [Add] = {3}, [Edit] = {4}, [Delete] = {5}, [Print] = {6}, Confidential = {7}, [Comment] = {8}, [Collaborate] = {9}, [Finalize] = {10}, [Masking] = {11} WHERE [Link ID] = {0} AND [User ID] = {1}";
+                dataContext.Database.ExecuteSqlRaw(sql, linkid, userid, view, add, edit, delete, print, confidential, comment, collaborate, finalize, masking, 1);
             }
             else
             {
-                sql = "INSERT INTO [Document Access] VALUES({0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10})";
-                dataContext.Database.ExecuteSqlRaw(sql, linkid, userid, view, add, edit, delete, print, confidential, 1, createdBy, createdDate);
+                sql = "INSERT INTO [Document Access] VALUES({0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}, {14})";
+                dataContext.Database.ExecuteSqlRaw(sql, linkid, userid, view, add, edit, delete, print, confidential, comment, collaborate, finalize, masking, 1, createdBy, createdDate);
             }
 
             TempData["linkID"] = linkid.ToString();
