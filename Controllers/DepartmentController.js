@@ -46,7 +46,8 @@ router.post('/create', requireAuth, async (req, res) => {
 
 // GET: Edit Form
 router.get('/edit/:id', requireAuth, async (req, res) => {
-  const department = await Department.findByPk(req.params.id);
+  // const department = await Department.findByPk(req.params.id);
+  const department = await Department.findOne({ where: { Id: req.params.id, Active: 1 } });
   if (!department) return res.status(404).send("Department not found");
 
   req.session.editData = department; // Store for comparison
@@ -116,15 +117,28 @@ router.get('/delete/:id', requireAuth, async (req, res) => {
 
     // Log them
     // console.error(`SubDepartments for Department ID ${departmentId}:`, subDepartments);
+    
+    // // Delete all related SubDepartments
+    // await SubDepartment.destroy({
+    //   where: { DepartmentID: departmentId }
+    // });
 
-    // Delete all related SubDepartments
-    await SubDepartment.destroy({
-      where: { DepartmentID: departmentId }
-    });
+    // // Delete the Department
+    // await Department.destroy({
+    //   where: { Id: departmentId }
+    // });
 
-    // Delete the Department
-    await Department.destroy({
-      where: { Id: departmentId }
+    // Soft-delete: set Active = 0 for SubDepartments and Department inside a transaction
+    await db.sequelize.transaction(async (t) => {
+      await SubDepartment.update(
+        { Active: 0 },
+        { where: { DepartmentID: departmentId }, transaction: t }
+      );
+
+      await Department.update(
+        { Active: 0 },
+        { where: { Id: departmentId }, transaction: t }
+      );
     });
 
     res.redirect('/department');
@@ -138,10 +152,14 @@ router.get('/delete/:id', requireAuth, async (req, res) => {
 
 // GET: List Departments
 router.get('/', requireAuth, async (req, res) => {
-  const list =  await Department.findAll({
-    include:[
+  // Only list active departments and include only active subdepartments
+  const list = await Department.findAll({
+    where: { Active: 1 },
+    include: [
       {
         model: db.SubDepartment,
+        where: { Active: 1 },
+        required: false // still return department if it has no active subdepartments
       }
     ]
   });
@@ -159,9 +177,14 @@ router.post('/search', requireAuth, async (req, res) => {
 
   const results = await Department.findAll({
     where: {
-      [Op.or]: [
-        { Name: { [Op.like]: `%${inputValue}%` } },
-        { Code: { [Op.like]: `%${inputValue}%` } }
+      [Op.and]: [
+        { Active: 1 },
+        {
+          [Op.or]: [
+            { Name: { [Op.like]: `%${inputValue}%` } },
+            { Code: { [Op.like]: `%${inputValue}%` } }
+          ]
+        }
       ]
     }
   });
