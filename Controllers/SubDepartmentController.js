@@ -11,7 +11,13 @@ const requireAuth=require("../middleware/requireAuth")
 router.get("/", requireAuth, async (req, res) => {
     console.log("req===>",req.user)
   const username = req.user.userName;
-  const list = await SubDepartment.findAll({include:[{model:db.Department}]});
+  // Only list active subdepartments and include parent department (if any)
+  const list = await SubDepartment.findAll({
+    where: { Active: 1 },
+    include: [
+      { model: db.Department, required: false }
+    ]
+  });
   res.json({ list, username });
 });
 // router.get("/", requireAuth, async (req, res) => {
@@ -69,7 +75,8 @@ router.post("/create", requireAuth, async (req, res) => {
 
 // Route: Edit Form
 router.get("/edit/:id", requireAuth, async (req, res) => {
-  const subDept = await SubDepartment.findByPk(req.params.id);
+  // Only allow editing active subdepartments
+  const subDept = await SubDepartment.findOne({ where: { id: req.params.id, Active: 1 } });
   if (!subDept) return res.status(404).send("Not found");
   req.session.subDeptBackup = subDept; // Store original
   res.render("subDepartment/edit", { subDept });
@@ -111,10 +118,13 @@ router.post("/edit/:id", requireAuth, async (req, res) => {
 
 // Route: Delete
 router.get("/delete/:id", requireAuth, async (req, res) => {
-  await SubDepartment.destroy({ where: { id: req.params.id } });
-  res.json({
-    status:true
-  });
+  // Soft-delete: set Active = 0 instead of destroying the record
+  await SubDepartment.update(
+    { Active: 0 },
+    { where: { id: req.params.id } }
+  );
+
+  res.json({ status: true });
 });
 
 // Route: Search
@@ -123,11 +133,11 @@ router.post("/search", requireAuth, async (req, res) => {
   if (!inputValue) return res.redirect("/subdepartments");
 
   const nameMatches = await SubDepartment.findAll({
-    where: { Name: { [Op.like]: `%${inputValue}%` } },
+    where: { Active: 1, Name: { [Op.like]: `%${inputValue}%` } },
   });
 
   const codeMatches = await SubDepartment.findAll({
-    where: { Code: { [Op.like]: `%${inputValue}%` } },
+    where: { Active: 1, Code: { [Op.like]: `%${inputValue}%` } },
   });
 
   // Merge unique
