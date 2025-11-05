@@ -146,45 +146,53 @@ async function ensureDirectoryExists(dirPath) {
  * @returns {Promise<Array<object>>} An array of objects, where each object represents a row.
  */
 async function readExcelData(filePath) {
-    const workbook = new ExcelJS.Workbook();
-    let excelDataTable = [];
+     const workbook = new ExcelJS.Workbook();
+     let excelDataTable = [];
+ 
+     try {
+         await workbook.xlsx.readFile(filePath);
+         let worksheet = workbook.getWorksheet('Sheet1');
+         if (!worksheet) {
+             worksheet = workbook.worksheets?.[0];
+         }
+         if (!worksheet) {
+             throw new Error('No worksheet found in the Excel file.');
+         }
 
-    try {
-        await workbook.xlsx.readFile(filePath);
-        const worksheet = workbook.getWorksheet('Sheet1');
+         const headerRow = worksheet.getRow(1);
+         if (!headerRow || headerRow.cellCount === 0) {
+             throw new Error('Excel file is empty or missing header row.');
+         }
 
-        if (!worksheet) {
-            throw new Error('Sheet1 not found in the Excel file.');
-        }
+         const columnCount = worksheet.actualColumnCount || headerRow.cellCount;
+         const headers = [];
+         for (let c = 1; c <= columnCount; c++) {
+             const cellVal = headerRow.getCell(c).value;
+             headers[c] = (cellVal !== null && cellVal !== undefined) ? String(cellVal).trim() : '';
+         }
 
-        const headerRow = worksheet.getRow(1);
-        if (!headerRow.values) {
-            throw new Error('Excel file is empty or missing header row.');
-        }
-
-        const columns = headerRow.values.map(cell => cell ? String(cell) : '').filter(Boolean);
-
-        worksheet.eachRow((row, rowNumber) => {
-            if (rowNumber === 1) return; // Skip header row
-
-            const rowData = {};
-            row.eachCell((cell, colNumber) => {
-                const header = columns[colNumber - 1];
-                if (header) {
-                    rowData[header] = cell.value;
-                }
-            });
-            excelDataTable.push(rowData);
-        });
-
-        logger.info(`Successfully read ${excelDataTable.length} rows from Excel file.`);
-        return excelDataTable;
-
-    } catch (error) {
-        logger.error(`Error reading Excel file: ${error.message}`);
-        throw error;
-    }
-}
+         worksheet.eachRow((row, rowNumber) => {
+             if (rowNumber === 1) return; // Skip header row
+             const rowData = {};
+             for (let c = 1; c <= columnCount; c++) {
+                 const header = headers[c];
+                 if (!header) continue;
+                 rowData[header] = row.getCell(c).value;
+             }
+             // Only push non-empty rows
+             if (Object.keys(rowData).length > 0) {
+                 excelDataTable.push(rowData);
+             }
+         });
+ 
+         logger.info(`Successfully read ${excelDataTable.length} rows from Excel file.`);
+         return excelDataTable;
+ 
+     } catch (error) {
+         logger.error(`Error reading Excel file: ${error.message}`);
+         throw error;
+     }
+ }
 
 // --- PDF Processing (Simplified, as tesseract.js often handles PDF directly) ---
 
@@ -264,8 +272,19 @@ const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ocr-field-'));
 
 
 router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) => {
-    //console.log("req.file=====>",req.file)
-    // fs.mkdirSync(path.join(__dirname, '../public/uploads/batchupload'),{recursive:true})
+     //console.log("req.file=====>",req.file)
+     // fs.mkdirSync(path.join(__dirname, '../public/uploads/batchupload'),{recursive:true})
+    if (!req.file) {
+        logger.error('No file uploaded. Expected field name "batchupload"');
+        return res.status(400).json({ error: 'No file uploaded. Please send a file in form-data under field name "batchupload".' });
+    }
+    // Validate required department context (frontend should send dep/subdep)
+    const depNumInit = Number(req.body?.dep);
+    const subdepNumInit = Number(req.body?.subdep);
+    if (!Number.isFinite(depNumInit) || !Number.isFinite(subdepNumInit)) {
+        logger.error('Missing required department fields: dep or subdep not provided');
+        return res.status(400).json({ error: 'Missing required fields: dep and subdep are required for batch upload.' });
+    }
     const excelFilePath = path.join(__dirname, '../public/uploads/batchupload', req.file.filename);
     //console.log("excelFilePath",excelFilePath)
     // const excelFilePath = path.join(__dirname, 'uploads', 'BatchUpload.xlsx');
@@ -303,13 +322,19 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
         let failedUpdates = 0;
 
         for (const [i, rowData] of excelDataTable.entries()) {
-            const fileName = rowData['File Name'];
-            // const LinkID = rowData['Link ID'];
-            const linkIdFromExcel = rowData['Link ID'];
-            //console.log("linkIdFromExcel",linkIdFromExcel)
-            if (!fileName ) {
-                logger.warn(`Skipping row ${i + 1}: Missing 'File Name' or 'Link ID'.`);
+            const get = (obj, ...keys) => {
+                for (const k of keys) {
+                    if (obj[k] !== undefined) return obj[k];
+                }
+                return undefined;
+            };
+
+            const fileName = get(rowData, 'File Name', 'FileName', 'filename', 'FILE NAME');
+            const linkIdFromExcel = get(rowData, 'Link ID', 'LinkID', 'linkid', 'LINK ID');
+            if (!fileName) {
+                logger.warn(`Skipping row ${i + 1}: Missing 'File Name'.`);
                 failedUpdates++;
+                processedDocuments.push({ fileName: '(missing)', status: 'Failed', error: "Missing 'File Name'." });
                 continue;
             }
 
@@ -322,96 +347,103 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                 
                 logger.info(`Processing record ${i + 1}/${excelDataTable.length}: ${fileName}.pdf`);
                 //console.log("filename",fileName)
-                const existingDoc = await db.Documents.findOne({
-                    where: {
-                        LinkID: linkIdFromExcel,
-                        Active: true
-                    },
-                    raw:true
-                });
-                //console.log("existingDoc",existingDoc)
-                let pdfExists = false;
-                const dir = path.join(__dirname, `../public/images/templates/document_${existingDoc.ID}`);
-                // //console.log("filename",fileName,"DocId".existingDoc.ID,"linkid",linkId)
-                const timestamp= new Date().getTime()
-                let filePath = undefined
-                try {
-                    // await fs.access(pdfFilePath, fs.constants.F_OK);
-                     //console.log("dir",dir)
-                     const pathrelativetoserver=`document_${existingDoc.ID}`
-                     await fs.mkdir(dir, { recursive: true })
-                    //  await clearDirectory(dir);
-                   
-                     filePath = path.join(dir, `${timestamp}.pdf`);
-                     filePath = filePath.trim();
-
-                     await fs.writeFile(filePath, existingDoc.DataImage); // write image or pdf buffer to disk
-                     console.log("existingDoc.DataImage",existingDoc.DataImage)
-                    console.log("filePath here====>1",filePath)
-                    //  let imageBuffer = doc.DataImage;
-                     let fileUrl = `${timestamp}.png`;
-                     const normalizedPath = path.normalize(filePath);
-                     console.log("filePath here====>2",normalizedPath)
-                     //console.log("normalizedPath",normalizedPath)
-                     await fs.access(normalizedPath, fs.constants.F_OK);
-                     console.log("filePath here====>22====>",filePath)
-                     pdfFilePath=normalizedPath
-                     //console.log("pdfFilePath=?",pdfFilePath)
-                    pdfExists = true;
-                    //console.log("file found")
-                    logger.info(`PDF file found: ${filePath}`);
-                } catch(err) {
-                    //console.log("file not found",err)
-                    logger.warn(`PDF file not found: ${filePath}. Skipping OCR.`);
+                // Lookup only if Link ID provided
+                let existingDoc = null;
+                if (linkIdFromExcel) {
+                    existingDoc = await db.Documents.findOne({
+                        where: { LinkID: linkIdFromExcel, Active: true },
+                        raw: true
+                    });
                 }
 
-                
+                // Defer file handling until after upsert
+                let pdfExists = false;
+                let filePath = undefined
+                const timestamp= Date.now()
+
+
+                const normalizeDate = (v) => (v ? new Date(v) : null);
+                const truthy = (v) => v === true || v === 1 || String(v).toLowerCase() === 'true';
+                const get = (obj, ...keys) => {
+                    for (const k of keys) {
+                        if (obj[k] !== undefined) return obj[k];
+                    }
+                    return undefined;
+                };
 
                 const linkId = existingDoc ? existingDoc.LinkID : generateLinkID();
-                
-                // Calculate page count from the actual PDF file
-                let pageCount = 0;
-                if (pdfExists && pdfFilePath) {
-                    try {
-                        const pdfBuffer = await fs.readFile(pdfFilePath);
-                        pageCount = await calculatePageCount(pdfBuffer, 'application/pdf');
-                    } catch (error) {
-                        logger.warn(`Error calculating page count for ${fileName}: ${error.message}`);
-                        pageCount = rowData['Page Count'] || 0; // Fallback to Excel value
-                    }
-                } else {
-                    pageCount = rowData['Page Count'] || 0; // Use Excel value if no PDF
-                }
-                
+
                 const documentData = {
                     LinkID: linkId,
                     FileName: fileName,
-                    FileDate: rowData['File Date'] ? new Date(rowData['File Date']) : new Date(serverDate),
-                    Expiration: rowData['Expiration'] === true || rowData['Expiration'] === 1,
-                    ExpirationDate: rowData['Expiration Date'] ? new Date(rowData['Expiration Date']) : null,
-                    Confidential: rowData['Confidential'] === true || rowData['Confidential'] === 1,
-                    'Page Count': pageCount,
+                    FileDate: normalizeDate(rowData['File Date']) || new Date(serverDate),
+                    Expiration: truthy(rowData['Expiration']),
+                    ExpirationDate: normalizeDate(rowData['Expiration Date']),
+                    Confidential: truthy(rowData['Confidential']),
+                    FileDescription: get(rowData, 'File Description', 'FileDescription') || '',
+                    Description: get(rowData, 'Description') || '',
+                    publishing_status: truthy(get(rowData, 'publishing_status', 'Publishing Status')), 
+                    Active: rowData['Active'] !== undefined ? truthy(rowData['Active']) : true,
                     Remarks: rowData['Remarks'] || '',
-                    Active: true,
-                    'Created By': rowData['Created By'] || 'System',
-                    'Created Date': new Date(serverDate)
+                    Createdby: rowData['Created By'] || 'System',
+                    CreatedDate: new Date(serverDate),
+                    DepartmentId: Number(req.body.dep) || null,
+                    SubDepartmentId: Number(req.body.subdep) || null,
                 };
 
                 for (let j = 1; j <= 10; j++) {
                     documentData[`Text${j}`] = rowData[`Text${j}`] || '';
-                    documentData[`Date${j}`] = rowData[`Date${j}`] ? new Date(rowData[`Date${j}`]) : new Date(serverDate);
+                    documentData[`Date${j}`] = normalizeDate(rowData[`Date${j}`]);
                 }
 
                 let document;
-                if (existingDoc) {
-                    await db.Documents.update(documentData, { where: { ID: existingDoc.ID } });
-                    logger.info(`Updated record for ${fileName} (ID: ${existingDoc.ID})`);
-                    documentStatus = 'updated';
-                    document = existingDoc;
-                } else {
-                    document = await db.Documents.create(documentData);
-                    logger.info(`Inserted new record for ${fileName}`);
-                    documentStatus = 'inserted';
+                try {
+                    if (existingDoc) {
+                        await db.Documents.update(documentData, { where: { ID: existingDoc.ID } });
+                        logger.info(`Updated record for ${fileName} (ID: ${existingDoc.ID})`);
+                        documentStatus = 'updated';
+                        document = await db.Documents.findOne({ where: { ID: existingDoc.ID } });
+                    } else {
+                        document = await db.Documents.create(documentData);
+                        logger.info(`Inserted new record for ${fileName}`);
+                        documentStatus = 'inserted';
+                    }
+                } catch (dbErr) {
+                    logger.error(`DB error for ${fileName}: ${dbErr.message}`);
+                    throw dbErr;
+                }
+
+                // Materialize a PDF/Image to disk if available, now that we have a persisted document
+                if (document && document.DataImage && document.DataImage.length > 0) {
+                    const dir = path.join(__dirname, `../public/images/templates/document_${document.ID}`);
+                    try {
+                        await fs.mkdir(dir, { recursive: true });
+                        filePath = path.join(dir, `${timestamp}.pdf`).trim();
+                        await fs.writeFile(filePath, document.DataImage);
+                        const normalizedPath = path.normalize(filePath);
+                        await fs.access(normalizedPath, fs.constants.F_OK);
+                        pdfFilePath = normalizedPath;
+                        pdfExists = true;
+                        logger.info(`PDF file materialized: ${filePath}`);
+                    } catch (err) {
+                        logger.warn(`PDF file not available for document ${document.ID}. Skipping OCR.`);
+                    }
+                }
+
+                // Calculate and persist page count if possible
+                try {
+                    let pageCount = 0;
+                    if (pdfExists && pdfFilePath) {
+                        const pdfBuffer = await fs.readFile(pdfFilePath);
+                        pageCount = await calculatePageCount(pdfBuffer, 'application/pdf');
+                    } else {
+                        pageCount = rowData['Page Count'] || 0;
+                    }
+                    if (typeof pageCount === 'number' && pageCount > 0) {
+                        await db.Documents.update({ PageCount: pageCount }, { where: { ID: document.ID } });
+                    }
+                } catch (error) {
+                    logger.warn(`Error calculating page count for ${fileName}: ${error.message}`);
                 }
 
                 if (pdfExists) {
@@ -427,7 +459,7 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                     console.log("pdfFilePath11111111111111111",pdfFilePath)
                     const buffer = await fs.readFile(pdfFilePath);
                     console.log("buffer",buffer)
-                    const outputDir = path.resolve(__dirname, `../public/images/templates/document_${existingDoc.ID}`);
+                    const outputDir = path.resolve(__dirname, `../public/images/templates/document_${document.ID}`);
 
                     // const outputDir="C:\\Users\\amroh\\dms-web-app-back-end\\Controllers\\uploads\\temp\\1749475931154output"
                     //console.log("outputDir",outputDir,"pdfFilePath==>",pdfFilePath)
@@ -442,13 +474,13 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                     //     fs.writeFile(outputDirPath, document.DataImage);
                     // }
                     await fs.mkdir(outputDir, { recursive: true });
-                    if(existingDoc.DataType=="pdf"||existingDoc.DataType==".pdf"){
+                    if(document.DataType=="pdf"||document.DataType==".pdf"){
                         await convertPdfBufferToImages(buffer, outputDir);
                     }
                     else{
                         const uuid=uuidv4()
                         const outputDirPath = path.join(outputDir, `${uuid}.png`);
-                        await fs.writeFile(outputDirPath, existingDoc.DataImage);
+                        await fs.writeFile(outputDirPath, document.DataImage);
                     }
 
                     const files = await fs.readdir(outputDir);

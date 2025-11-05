@@ -1561,170 +1561,200 @@ router.get('/alldocuments/:userid', async (req, res) => {
 });
 
 router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
-  try {
-    const { documentId } = req.params;
-    const  userId  = req.user.id;
-    const latestestdocument=await db.Documents.findByPk(documentId)
-    const LinkID=latestestdocument.LinkID
-    // ⚡ IMPORTANT: Fetch document with DataImage for detail view
-    const document = await db.Documents.findOne({
-      where: { LinkID: LinkID, Active: true },
-      attributes: {
-        // Include DataImage for detail view so we can process it
-      }
-    });
+   try {
+     const { documentId } = req.params;
+     const  userId  = req.user.id;
+     const latestestdocument=await db.Documents.findByPk(documentId)
+     if (!latestestdocument) {
+       return res.status(404).json({ success: false, message: 'Document not found' });
+     }
+     const LinkID=latestestdocument.LinkID
+     // ⚡ IMPORTANT: Fetch document with DataImage for detail view
+     const document = await db.Documents.findOne({
+       where: { LinkID: LinkID, Active: true },
+       attributes: {
+         // Include DataImage for detail view so we can process it
+       }
+     });
+     
+     console.log("Document fetched:", document ? "Yes" : "No");
+     console.log("DataImage size:", document?.DataImage?.length || 0, "bytes");
     
-    console.log("Document fetched:", document ? "Yes" : "No");
-    console.log("DataImage size:", document?.DataImage?.length || 0, "bytes");
-   
 
-    if (!document) {
-      return res.status(404).json({
-        success: false,
-        message: 'Document not found'
-      });
-    }
+     if (!document) {
+       return res.status(404).json({
+         success: false,
+         message: 'Document not found'
+       });
+     }
 
-    // Log view activity
-    await logAuditTrail(documentId, 'VIEWED', req.user.id, null, null, req, LinkID);
-    await logCollaboratorActivity(documentId, req.user.id, 'DOCUMENT_OPENED', req,null,LinkID);
-    const versions= await db.DocumentVersions.findAll({
-          where: { LinkID: LinkID },
-          order: [['ModificationDate', 'DESC']]
-        });
+     // If no file/image stored, skip heavy processing and just return metadata
+     if (!document.DataImage || document.DataImage.length === 0) {
+       const versions= await db.DocumentVersions.findAll({
+             where: { LinkID: LinkID },
+             order: [['ModificationDate', 'DESC']]
+           });
+       const templates = await db.Template.findAll({ raw: true });
+       const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+       const docwith={
+         document:[{ ...docJson, filepath: null }],
+         versions:versions,
+         collaborations:[],
+         comments:[],
+         auditTrails:[],
+         restrictions:[],
+         OCRDocumentReadFields:[],
+         approvalsforusertoacceptorreject:[]
+       };
+       return res.status(200).json({ success: true, data: docwith });
+     }
 
-    const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
-      where: { LinkID: LinkID },
-      raw :true    });
-      // console.log("OCRDocumentReadFields",OCRDocumentReadFields)
-    const collaborations = await db.DocumentCollaborations.findAll({
-      where: { LinkID: LinkID },
-      include: [
-        {
-          model: db.Users,
-          as: 'Collaborator',
-          
-        },
-        {
-          model: db.CollaboratorActivities,
-          as: 'Activities',
-          // where: { Active: true },
-          required: false
-        }
-      ]
-      // order: [['AddedDate', 'DESC']]
-    });
-    
-    const comments = await db.DocumentComments.findAll({
-      where: { LinkID: LinkID },
-      include:[
-        {
-          model: db.Users,
-          as: 'commenter',
-          
-        }
-      ],
-      order: [['CommentDate', 'DESC']]
-    });
-    const auditTrails = await db.DocumentAuditTrail.findAll({
-      where: { LinkID: LinkID },
-      include: [
-        {
-          model: db.Users,
-          as: 'actor',
-          attributes: ['id', 'userName']
-        }
-      ],
-      order: [['ActionDate', 'DESC']]
-    });
-    const restrictions = await db.DocumentRestrictions.findAll({
-      where: { LinkID: LinkID,UserID:userId },
-      order: [['CreatedDate', 'DESC']]
-    });
-    const updatedArray = OCRDocumentReadFields.map(item => {
-      const match = restrictions.find(el => el.Field === item.Field);
-      // console.log("match",match,"item",item)
-      const newitem=JSON.parse(JSON.stringify(item));
-      if(match){
-        newitem.Restricted = true
-      }
-      else{
-        newitem.Restricted = false
-      }
-      return newitem;
-    });
+     // Log view activity
+     await logAuditTrail(documentId, 'VIEWED', req.user.id, null, null, req, LinkID);
+     await logCollaboratorActivity(documentId, req.user.id, 'DOCUMENT_OPENED', req,null,LinkID);
+     const versions= await db.DocumentVersions.findAll({
+           where: { LinkID: LinkID },
+           order: [['ModificationDate', 'DESC']]
+         });
 
-    const user=await db.Users.findOne({
-    where:{ID:req.user.id},
-      
-    })
-    let userAccess=[]
-    try{
-      userAccess=JSON.parse(user.userAccessArray)
-    }catch(e){}
-    console.log("useraccess array",userAccess)
-    const approvers=await db.DocumentApprovers.findAll({raw:true})
-    console.log("approvers",approvers)
-    const approversaccess=approvers.filter(e=>{
-      if(userAccess.includes(parseInt(e.ApproverID))){
-        return e
-      }
-    })
-      console.log("approversaccess",approversaccess)
-      const accessforthisdoc=approversaccess.find(e =>
-        e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
-      );
-      
-      console.log("accessforthisdoc",accessforthisdoc)
-    const approvalsforthisdoc=await db.DocumentApprovals.findAll({
-            where:{
-              LinkID:document.LinkID
-            }
-            ,raw:true
-          })
-          console.log("accessforthisdoc",accessforthisdoc)
-    const approvalsforusertoacceptorreject=accessforthisdoc?approvalsforthisdoc:[]
-    const templates = await db.Template.findAll({ raw: true });
-    
-    // ⚡ Force processing for detail view - skip cache to regenerate images
-    console.log("Processing document for detail view, DataImage available:", !!document.DataImage);
-    console.log("Document ID:", document.ID, "Document LinkID:", document.LinkID);
-    const processedDocs = await Promise.all(
-      [document].map(async doc =>
-        await processDocument(doc, restrictions, OCRDocumentReadFields, templates, true)
-      )
-    );
-    
-    // console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
-    //   if (key === 'DataImage') return '[BLOB DATA REMOVED]';
-    //   return value;
-    // }));
-    console.log("Filepath returned:", processedDocs[0]?.filepath);
-    
-    const docwith={
-      document:processedDocs,
-      versions:versions,
-      collaborations:collaborations,
-      comments:comments,
-      auditTrails:auditTrails,
-      restrictions:restrictions,
-      OCRDocumentReadFields:updatedArray,
-      approvalsforusertoacceptorreject:approvalsforusertoacceptorreject
-    };
-    res.status(200).json({
-      success: true,
-      data: docwith
-    });
+     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
+       where: { LinkId: LinkID },
+       raw :true    });
+       // console.log("OCRDocumentReadFields",OCRDocumentReadFields)
+     const collaborations = await db.DocumentCollaborations.findAll({
+       where: { LinkID: LinkID },
+       include: [
+         {
+           model: db.Users,
+           as: 'Collaborator',
+           
+         },
+         {
+           model: db.CollaboratorActivities,
+           as: 'Activities',
+           // where: { Active: true },
+           required: false
+         }
+       ]
+       // order: [['AddedDate', 'DESC']]
+     });
+     
+     const comments = await db.DocumentComments.findAll({
+       where: { LinkID: LinkID },
+       include:[
+         {
+           model: db.Users,
+           as: 'commenter',
+           
+         }
+       ],
+       order: [['CommentDate', 'DESC']]
+     });
+     const auditTrails = await db.DocumentAuditTrail.findAll({
+       where: { LinkID: LinkID },
+       include: [
+         {
+           model: db.Users,
+           as: 'actor',
+           attributes: ['id', 'userName']
+         }
+       ],
+       order: [['ActionDate', 'DESC']]
+     });
+     const restrictions = await db.DocumentRestrictions.findAll({
+       where: { LinkID: LinkID,UserID:userId },
+       order: [['CreatedDate', 'DESC']]
+     });
+     const updatedArray = OCRDocumentReadFields.map(item => {
+       const match = restrictions.find(el => el.Field === item.Field);
+       // console.log("match",match,"item",item)
+       const newitem=JSON.parse(JSON.stringify(item));
+       if(match){
+         newitem.Restricted = true
+       }
+       else{
+         newitem.Restricted = false
+       }
+       return newitem;
+     });
 
-  } catch (error) {
-    console.error('Error fetching document:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching document',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-    });
-  }
-});
+     const user=await db.Users.findOne({
+     where:{ID:req.user.id},
+       
+     })
+     let userAccess=[]
+     try{
+       userAccess=JSON.parse(user.userAccessArray)
+     }catch(e){}
+     console.log("useraccess array",userAccess)
+     const approvers=await db.DocumentApprovers.findAll({raw:true})
+     console.log("approvers",approvers)
+     const approversaccess=approvers.filter(e=>{
+       if(userAccess.includes(parseInt(e.ApproverID))){
+         return e
+       }
+     })
+       console.log("approversaccess",approversaccess)
+       const accessforthisdoc=approversaccess.find(e =>
+         e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
+       );
+       
+       console.log("accessforthisdoc",accessforthisdoc)
+     const approvalsforthisdoc=await db.DocumentApprovals.findAll({
+             where:{
+               LinkID:document.LinkID
+             }
+             ,raw:true
+           })
+           console.log("accessforthisdoc",accessforthisdoc)
+     const approvalsforusertoacceptorreject=accessforthisdoc?approvalsforthisdoc:[]
+     const templates = await db.Template.findAll({ raw: true });
+     
+     // ⚡ Force processing for detail view - skip cache to regenerate images
+     console.log("Processing document for detail view, DataImage available:", !!document.DataImage);
+     console.log("Document ID:", document.ID, "Document LinkID:", document.LinkID);
+     let processedDocs = [];
+     try {
+       processedDocs = await Promise.all(
+         [document].map(async doc =>
+           await processDocument(doc, restrictions, OCRDocumentReadFields, templates, true)
+         )
+       );
+     } catch (procErr) {
+       console.warn('processDocument failed, returning metadata only:', procErr?.message);
+       processedDocs = [{ filepath: null, error: 'processing_failed' }];
+     }
+     
+     // console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
+     //   if (key === 'DataImage') return '[BLOB DATA REMOVED]';
+     //   return value;
+     // }));
+     console.log("Filepath returned:", processedDocs[0]?.filepath);
+     
+     const docwith={
+       document:processedDocs,
+       versions:versions,
+       collaborations:collaborations,
+       comments:comments,
+       auditTrails:auditTrails,
+       restrictions:restrictions,
+       OCRDocumentReadFields:updatedArray,
+       approvalsforusertoacceptorreject:approvalsforusertoacceptorreject
+     };
+     res.status(200).json({
+       success: true,
+       data: docwith
+     });
+
+   } catch (error) {
+     console.error('Error fetching document:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Error fetching document',
+       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+     });
+   }
+ });
 
 
 
