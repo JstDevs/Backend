@@ -121,7 +121,40 @@ const loadDocumentAccess = async (linkID, req) => {
 // Routes
 router.get('/', async (req, res) => {
     try {
-        const { depid = 0, linkid = 0, subdepid = 0 } = req.query;
+        const { depid = 0, linkid = 0, subdepid = 0, departmentId, subDepartmentId } = req.query;
+        
+        // Handle JSON API requests for departmentId/subDepartmentId (frontend API calls)
+        if (departmentId && subDepartmentId) {
+            // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
+            const assignedSubDeps = await AssignSubdepartment.findAll({
+                where: { 
+                    DepartmentID: departmentId, 
+                    SubDepartmentID: subDepartmentId, 
+                    Active: true 
+                }
+            });
+            
+            if (!assignedSubDeps || assignedSubDeps.length === 0) {
+                return res.json({ status: true, data: [] }); // Return empty array if no assignment found
+            }
+            
+            // Get all unique LinkIDs from the assigned subdepartments
+            const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
+            
+            const allocations = await DocumentAccess.findAll({
+                where: { 
+                    LinkID: { [Op.in]: linkIDs },
+                    Active: true 
+                },
+                include: [{
+                    model: Users,
+                    attributes: ['ID', 'UserName', 'Active']
+                }],
+                order: [['CreatedDate', 'DESC']]
+            });
+            
+            return res.json({ status: true, data: allocations });
+        }
         
         req.viewData = {};
         req.viewBag = {};
@@ -802,6 +835,301 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
     } catch (error) {
         console.error('Error fetching available fields:', error);
         return res.status(500).json({ status: false, error: 'Failed to fetch available fields' });
+    }
+});
+
+// GET allocations by LinkID - /allocation/by-link/:id
+router.get('/by-link/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { includeInactive } = req.query;
+        
+        const where = { LinkID: id };
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+        
+        const allocations = await DocumentAccess.findAll({
+            where,
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }],
+            order: [['CreatedDate', 'DESC']]
+        });
+        
+        return res.json({ status: true, data: allocations });
+    } catch (error) {
+        console.error('Error fetching allocations by link:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch allocations by link' });
+    }
+});
+
+// GET allocations by Department and SubDepartment - /allocation/by-dept/:deptId/:subDeptId
+router.get('/by-dept/:deptId/:subDeptId', async (req, res) => {
+    try {
+        const { deptId, subDeptId } = req.params;
+        const { includeInactive } = req.query;
+        
+        // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
+        const assignedSubDeps = await AssignSubdepartment.findAll({
+            where: { 
+                DepartmentID: deptId, 
+                SubDepartmentID: subDeptId, 
+                Active: true 
+            }
+        });
+        
+        if (!assignedSubDeps || assignedSubDeps.length === 0) {
+            return res.json({ status: true, data: [] }); // Return empty array if no assignment found
+        }
+        
+        // Get all unique LinkIDs from the assigned subdepartments
+        const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
+        
+        const where = { 
+            LinkID: { [Op.in]: linkIDs }
+        };
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+        
+        const allocations = await DocumentAccess.findAll({
+            where,
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }],
+            order: [['CreatedDate', 'DESC']]
+        });
+        
+        return res.json({ status: true, data: allocations });
+    } catch (error) {
+        console.error('Error fetching allocations by dept:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch allocations by dept' });
+    }
+});
+
+// GET allocations by Department and SubDepartment (query params) - /allocation/by-dept?deptId=29&subDeptId=24
+router.get('/by-dept', async (req, res) => {
+    try {
+        const { deptId, subDeptId } = req.query;
+        const { includeInactive } = req.query;
+        
+        if (!deptId || !subDeptId) {
+            return res.status(400).json({ status: false, error: 'Missing required parameters: deptId and subDeptId' });
+        }
+        
+        // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
+        const assignedSubDeps = await AssignSubdepartment.findAll({
+            where: { 
+                DepartmentID: deptId, 
+                SubDepartmentID: subDeptId, 
+                Active: true 
+            }
+        });
+        
+        if (!assignedSubDeps || assignedSubDeps.length === 0) {
+            return res.json({ status: true, data: [] }); // Return empty array if no assignment found
+        }
+        
+        // Get all unique LinkIDs from the assigned subdepartments
+        const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
+        
+        const where = { 
+            LinkID: { [Op.in]: linkIDs }
+        };
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+        
+        const allocations = await DocumentAccess.findAll({
+            where,
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }],
+            order: [['CreatedDate', 'DESC']]
+        });
+        
+        return res.json({ status: true, data: allocations });
+    } catch (error) {
+        console.error('Error fetching allocations by dept (query):', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch allocations by dept' });
+    }
+});
+
+// GET allocation by User, Department and SubDepartment - /allocation/user/:userId/:deptId/:subDeptId
+router.get('/user/:userId/:deptId/:subDeptId', async (req, res) => {
+    try {
+        const { userId, deptId, subDeptId } = req.params;
+        const { includeInactive } = req.query;
+        
+        // Find the assigned subdepartment to get the LinkID
+        const assignedSubDep = await AssignSubdepartment.findOne({
+            where: { 
+                DepartmentID: deptId, 
+                SubDepartmentID: subDeptId, 
+                Active: true 
+            }
+        });
+        
+        if (!assignedSubDep) {
+            return res.json({ status: true, data: null }); // Return null if no assignment found
+        }
+        
+        const linkID = assignedSubDep.LinkID;
+        const where = { 
+            LinkID: linkID, 
+            UserID: userId 
+        };
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+        
+        const allocation = await DocumentAccess.findOne({
+            where,
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }]
+        });
+        
+        return res.json({ status: true, data: allocation });
+    } catch (error) {
+        console.error('Error fetching allocation by user and dept:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch allocation by user and dept' });
+    }
+});
+
+// GET all allocations - /allocation/all
+router.get('/all', async (req, res) => {
+    try {
+        const { includeInactive } = req.query;
+        
+        const where = {};
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+        
+        const allocations = await DocumentAccess.findAll({
+            where,
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }],
+            order: [['CreatedDate', 'DESC']]
+        });
+        
+        return res.json({ status: true, data: allocations });
+    } catch (error) {
+        console.error('Error fetching all allocations:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch all allocations' });
+    }
+});
+
+// PUT update allocation by ID - /allocation/update/:id
+router.put('/update/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const {
+            View,
+            Add,
+            Edit,
+            Delete,
+            Print,
+            Confidential,
+            Comment,
+            Collaborate,
+            Finalize,
+            Masking,
+            Active,
+            fields,
+            LinkID,
+            UserID
+        } = req.body;
+
+        let allocation = null;
+
+        // DocumentAccess doesn't have an auto-increment ID, so we need LinkID + UserID to identify
+        // Try multiple ways to find the allocation:
+        
+        // 1. If LinkID and UserID are provided in body, use them (most reliable)
+        if (LinkID && UserID) {
+            allocation = await DocumentAccess.findOne({
+                where: { LinkID: LinkID, UserID: UserID }
+            });
+        }
+
+        // 2. Try findByPk if there's a potential auto-generated ID (some DBs might have this)
+        if (!allocation) {
+            try {
+                allocation = await DocumentAccess.findByPk(id);
+            } catch (err) {
+                // findByPk might fail if no ID column, continue to other methods
+            }
+        }
+
+        // 3. Try to find by LinkID if id might be a LinkID
+        if (!allocation) {
+            allocation = await DocumentAccess.findOne({
+                where: { LinkID: id }
+            });
+        }
+
+        // 4. If still not found and we have UserID in body, try LinkID from body with UserID
+        if (!allocation && LinkID && UserID) {
+            allocation = await DocumentAccess.findOne({
+                where: { LinkID: LinkID, UserID: UserID }
+            });
+        }
+
+        if (!allocation) {
+            return res.status(404).json({ 
+                status: false, 
+                error: 'Allocation not found',
+                hint: 'Please provide LinkID and UserID in the request body'
+            });
+        }
+
+        // Prepare update data
+        const updateData = {};
+        if (View !== undefined) updateData.View = View;
+        if (Add !== undefined) updateData.Add = Add;
+        if (Edit !== undefined) updateData.Edit = Edit;
+        if (Delete !== undefined) updateData.Delete = Delete;
+        if (Print !== undefined) updateData.Print = Print;
+        if (Confidential !== undefined) updateData.Confidential = Confidential;
+        if (Comment !== undefined) updateData.Comment = Comment;
+        if (Collaborate !== undefined) updateData.Collaborate = Collaborate;
+        if (Finalize !== undefined) updateData.Finalize = Finalize;
+        if (Masking !== undefined) updateData.Masking = Masking;
+        if (Active !== undefined) updateData.Active = Active;
+        if (fields !== undefined) updateData.fields = fields;
+
+        // Update the allocation
+        await allocation.update(updateData);
+
+        // Fetch the updated allocation with user info
+        const updatedAllocation = await DocumentAccess.findOne({
+            where: { 
+                LinkID: allocation.LinkID, 
+                UserID: allocation.UserID 
+            },
+            include: [{
+                model: Users,
+                attributes: ['ID', 'UserName', 'Active']
+            }]
+        });
+
+        return res.json({ 
+            status: true, 
+            data: updatedAllocation,
+            message: 'Allocation updated successfully' 
+        });
+    } catch (error) {
+        console.error('Error updating allocation:', error);
+        return res.status(500).json({ status: false, error: 'Failed to update allocation', details: error.message });
     }
 });
 
