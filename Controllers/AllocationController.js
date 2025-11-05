@@ -40,7 +40,7 @@ const loadDocumentType = async (depid, subdepid, req) => {
     });
     
     const dept = await Department.findOne({ where: { ID: depid } });
-    const subDeptList = await SubDepartment.findAll({ where: { Active: true } });
+    const subDeptList = await SubDepartment.findAll();
     
     req.viewData = req.viewData || {};
     req.viewBag = req.viewBag || {};
@@ -50,7 +50,7 @@ const loadDocumentType = async (depid, subdepid, req) => {
     req.viewBag.depid = depid;
 
     if (assignSubDep.length > 0) {
-            const subdept = await SubDepartment.findAll({ where: { Active: true } });
+        const subdept = await SubDepartment.findAll();
         
         // Remove assigned subdepartments from available list
         const filteredSubDeptList = subDeptList.filter(subDept => 
@@ -176,7 +176,7 @@ router.get('/', async (req, res) => {
         }
 
         req.viewData.DepartmentList = await Department.findAll();
-    req.viewData.SubdepartmentList = await SubDepartment.findAll({ where: { Active: true } });
+        req.viewData.SubdepartmentList = await SubDepartment.findAll();
 
         const sessionDepId = req.session.depid;
         if (sessionDepId) {
@@ -231,7 +231,7 @@ router.get('/add-subdepartment', async (req, res) => {
         });
         
         const dept = await Department.findOne({ where: { ID: depid } });
-    const subDeptList = await SubDepartment.findAll({ where: { Active: true } });
+        const subDeptList = await SubDepartment.findAll();
         
         // Filter out assigned subdepartments
         const availableSubDepts = subDeptList.filter(subDept => 
@@ -249,7 +249,7 @@ router.get('/add-subdepartment', async (req, res) => {
         };
 
         if (subdepid !== 0) {
-            const subdepartment = await SubDepartment.findOne({ where: { ID: subdepid, Active: true } });
+            const subdepartment = await SubDepartment.findOne({ where: { ID: subdepid } });
             if (subdepartment) {
                 viewBag.Subdepartment = subdepartment.Name;
                 viewBag.subdepid = subdepid;
@@ -655,7 +655,7 @@ router.get('/fields', async (req, res) => {
             const subdepid = req.session.subdepid;
 
             const department = await Department.findOne({ where: { ID: depid } });
-            const subdepartment = await SubDepartment.findOne({ where: { ID: subdepid, Active: true } });
+            const subdepartment = await SubDepartment.findOne({ where: { ID: subdepid } });
             const fields = await Fields.findAll({ where: { LinkID: linkid } });
 
             viewBag.depid = depid;

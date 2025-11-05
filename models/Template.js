@@ -29,6 +29,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true // store URL or file path
     },
+    active: {
+      type: DataTypes.TINYINT,
+      allowNull: false,
+      defaultValue: 1
+    },
     header:{
   type: DataTypes.STRING,
       allowNull: true // store URL or file path

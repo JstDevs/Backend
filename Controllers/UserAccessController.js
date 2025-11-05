@@ -13,6 +13,7 @@ const { UserAccess, Module, ModuleAccess } = db;
 router.get('/', requireAuth, async (req, res) => {
     try {
        const userAccess = await db.UserAccess.findAll({
+            where: { Active: true },
             include: [{ model: db.ModuleAccess,
                 as: 'moduleAccess',
                 include: [{
@@ -50,11 +51,11 @@ router.get('/edit/:userid', requireAuth, async (req, res) => {
         const { description } = req.query;
 
         const moduleAccess = await ModuleAccess.findAll({
-            where: { UAID: userid },
+            where: { UAID: userid, Active: true },
             order: [['ModuleID', 'ASC']]
         });
 
-        const userAccess = await UserAccess.findAll();
+        const userAccess = await UserAccess.findAll({ where: { Active: true } });
         const modules = await Module.findAll();
 
         res.json({
@@ -300,15 +301,23 @@ router.delete('/:userid', requireAuth, async (req, res) => {
             });
         }
 
-        // Delete all module access entries for this user
-        await db.ModuleAccess.destroy({
-            where: { UAID: userid }
-        });
+        // Soft-delete: mark module access entries and the user access record inactive
+        await db.ModuleAccess.update(
+            { Active: false },
+            { where: { UAID: userid } }
+        );
 
-        // Delete the user access record
-        await db.UserAccess.destroy({
-            where: { ID: userid }
-        });
+        const [updated] = await db.UserAccess.update(
+            { Active: false },
+            { where: { ID: userid } }
+        );
+
+        if (updated === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User Access not found'
+            });
+        }
 
         res.json({
             success: true,
@@ -344,7 +353,8 @@ router.get('/search/:query', requireAuth, async (req, res) => {
             where: {
                 Description: {
                     [Op.like]: `%${query}%`
-                }
+                },
+                Active: true
             }
         });
 
@@ -354,7 +364,7 @@ router.get('/search/:query', requireAuth, async (req, res) => {
         if (userAccess.length > 0) {
             const firstUser = userAccess[0];
             moduleAccess = await db.ModuleAccess.findAll({
-                where: { UAID: firstUser.ID },
+                where: { UAID: firstUser.ID, Active: true },
                 order: [['ModuleID', 'ASC']],
                 include:[{model:db.Module,as:"module"}]
             });

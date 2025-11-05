@@ -11,6 +11,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
      
     },
+    Active: {
+      type: DataTypes.TINYINT,
+      allowNull: true,
+    
+    },
     UserName: {
       type: DataTypes.STRING,
       allowNull: true,

@@ -46,7 +46,7 @@ router.get('/',requireAuth, async (req, res) => {
         } else {
             // Fetch all active users with their access levels
             usersList = await Users.findAll({
-                where: { active: true },
+                where: { Active: true },
 
                  include: [{
                     model: UserAccess,
@@ -142,13 +142,15 @@ router.get('/',requireAuth, async (req, res) => {
 // });
 
 
-// GET /delete/:id
+// GET /delete/:id (soft-delete only active users)
 router.get('/delete/:id', async (req, res) => {
     try {
         const id = parseInt(req.params.id);
+        // Only find active users to avoid re-deleting inactive ones
         const user = await Users.findOne({
             where:{
-                ID:id
+                ID:id,
+                Active: true
             }
         });
         console.log("user",user)
@@ -175,14 +177,19 @@ router.delete('/delete/:id', async (req, res) => {
     try {
         const id = parseInt(req.params.id);
 
-        // Hard delete - permanently remove record
-        await Users.destroy({
-            where: { ID: id }
-        });
+        // Soft delete instead of hard destroy: set Active = false
+        const [updated] = await Users.update(
+            { Active: false },
+            { where: { ID: id } }
+        );
+
+        if (updated === 0) {
+            return res.status(404).json({ status: false, message: 'User not found' });
+        }
 
         res.json({
             status: true,
-            message: "User permanently deleted"
+            message: "User deleted"
         });
     } catch (error) {
         console.error('Error in delete:', error);
@@ -190,7 +197,7 @@ router.delete('/delete/:id', async (req, res) => {
     }
 });
 
-// GET /edit/:id
+// GET /edit/:id — only allow editing active users
 router.get('/edit/:id', async (req, res) => {
     try {
         const id = parseInt(req.params.id);
@@ -201,7 +208,8 @@ router.get('/edit/:id', async (req, res) => {
             });
         }
 
-        const user = await Users.findByPk(id);
+        // Only fetch user if active
+        const user = await Users.findOne({ where: { ID: id, Active: true } });
         if (!user) {
             return res.status(404).render('error', { 
                 error: { message: 'User not found' } 

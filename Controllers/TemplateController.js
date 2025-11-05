@@ -85,6 +85,9 @@ try {
   if (departmentId) where.departmentId = departmentId;
   if (subDepartmentId) where.subDepartmentId = subDepartmentId;
 
+  // Only return active templates
+  where.active = 1;
+
   const templates = await Template.findAll({
     where,
     include: [
@@ -104,7 +107,7 @@ try {
 // Get Template by ID
 router.get('/:id', async (req, res) => {
   try {
-    const template = await Template.findOne({where:{ID:req.params.id}, include: [
+    const template = await Template.findOne({where:{ID:req.params.id, active: 1}, include: [
       { model: db.Department, attributes: ['ID', 'Name'] },
       { model: db.SubDepartment, attributes: ['ID', 'Name'] }
     ]});
@@ -154,7 +157,11 @@ router.delete('/:id', async (req, res) => {
       fs.unlinkSync(template.samplePdfPath);
     }
 
-    await template.destroy();
+    const [updated] = await Template.update(
+      { active: 0 },
+      { where: { ID: req.params.id } }
+    );
+    if (updated === 0) return res.status(500).json({ error: 'Failed to delete template' });
     res.json({ message: 'Template deleted' });
   } catch (err) {
     console.error(err);
