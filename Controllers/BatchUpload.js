@@ -200,6 +200,26 @@ async function readExcelData(filePath) {
 // similar to the previous multi-file example, using `pdf-lib`.
 // For direct OCR, tesseract.js is usually sufficient with a PDF path and page number.
 
+// --- Audit Trail Helper ---
+const logAuditTrail = async (documentId, action, actionBy, oldValues = null, newValues = null, req = null, LinkID) => {
+    try {
+        await db.DocumentAuditTrail.create({
+            DocumentID: documentId,
+            Action: action,
+            ActionBy: actionBy,
+            ActionDate: new Date(),
+            OldValues: oldValues,
+            NewValues: newValues,
+            IPAddress: req?.ip,
+            UserAgent: req?.get('User-Agent'),
+            SessionID: req?.sessionID,
+            LinkID: LinkID
+        });
+    } catch (error) {
+        logger.error(`Failed to log audit trail for document ${documentId}: ${error.message}`);
+        // Don't throw - audit trail failure shouldn't break batch processing
+    }
+};
 
 // --- OCR Service ---
 
@@ -447,6 +467,77 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                 } catch (versionErr) {
                     logger.warn(`Failed to create version entry for ${fileName}: ${versionErr.message}`);
                     // Don't fail the whole batch if version creation fails
+                }
+
+                // Create audit trail entry for document creation/update
+                try {
+                    // Get user ID from request (must be a valid numeric user ID)
+                    let userId = req.user?.id || req.user?.ID || req.body?.userId || req.body?.userID;
+                    
+                    // If we have a numeric ID, validate it exists; otherwise find or use system user
+                    if (userId && !isNaN(userId)) {
+                        userId = Number(userId);
+                        const userExists = await db.Users.findByPk(userId);
+                        if (!userExists) {
+                            userId = null; // Invalid user ID, will fallback to system user
+                        }
+                    } else {
+                        userId = null;
+                    }
+                    
+                    // Fallback: Find a system/admin user or first active user
+                    if (!userId) {
+                        const systemUser = await db.Users.findOne({
+                            where: { 
+                                Active: true,
+                                // Optionally match by username if you have a 'System' user
+                                userName: 'System'
+                            },
+                            attributes: ['ID']
+                        });
+                        
+                        if (systemUser) {
+                            userId = systemUser.ID;
+                        } else {
+                            // Last resort: get first active user
+                            const firstUser = await db.Users.findOne({
+                                where: { Active: true },
+                                attributes: ['ID'],
+                                order: [['ID', 'ASC']]
+                            });
+                            userId = firstUser ? firstUser.ID : null;
+                        }
+                    }
+                    
+                    // Only create audit trail if we have a valid user ID
+                    if (userId) {
+                        // Prepare document data for audit trail (without DataImage blob)
+                        const docForAudit = typeof document.toJSON === 'function' ? document.toJSON() : { ...document };
+                        if (docForAudit.DataImage) delete docForAudit.DataImage;
+                        
+                        // Prepare old values for update (if existingDoc was found)
+                        let oldValuesForAudit = null;
+                        if (existingDoc) {
+                            oldValuesForAudit = { ...existingDoc };
+                            if (oldValuesForAudit.DataImage) delete oldValuesForAudit.DataImage;
+                        }
+                        
+                        await logAuditTrail(
+                            document.ID,
+                            existingDoc ? 'UPDATED' : 'CREATED',
+                            userId,
+                            oldValuesForAudit ? JSON.stringify(oldValuesForAudit) : null,
+                            JSON.stringify(docForAudit),
+                            req,
+                            document.LinkID
+                        );
+                        logger.info(`Created audit trail entry for document ${fileName} (ID: ${document.ID}, Action: ${existingDoc ? 'UPDATED' : 'CREATED'}, User: ${userId})`);
+                    } else {
+                        logger.warn(`Skipping audit trail for ${fileName}: No valid user ID found`);
+                    }
+                } catch (auditErr) {
+                    logger.warn(`Failed to create audit trail entry for ${fileName}: ${auditErr.message}`);
+                    // Don't fail the whole batch if audit trail creation fails
                 }
 
                 // Materialize a PDF/Image to disk if available, now that we have a persisted document

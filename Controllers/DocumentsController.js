@@ -1588,26 +1588,50 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        });
      }
 
-     // If no file/image stored, skip heavy processing and just return metadata
-     if (!document.DataImage || document.DataImage.length === 0) {
-       const versions= await db.DocumentVersions.findAll({
-             where: { LinkID: LinkID },
-             order: [['ModificationDate', 'DESC']]
-           });
-       const templates = await db.Template.findAll({ raw: true });
-       const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
-       const docwith={
-         document:[{ ...docJson, filepath: null }],
-         versions:versions,
-         collaborations:[],
-         comments:[],
-         auditTrails:[],
-         restrictions:[],
-         OCRDocumentReadFields:[],
-         approvalsforusertoacceptorreject:[]
-       };
-       return res.status(200).json({ success: true, data: docwith });
-     }
+    // If no file/image stored, skip heavy processing and just return metadata
+    if (!document.DataImage || document.DataImage.length === 0) {
+      const versions= await db.DocumentVersions.findAll({
+            where: { LinkID: LinkID },
+            order: [['ModificationDate', 'DESC']]
+          });
+      
+      // Fetch audit trails even for documents without DataImage
+      const auditTrails = await db.DocumentAuditTrail.findAll({
+        where: { LinkID: LinkID },
+        include: [
+          {
+            model: db.Users,
+            as: 'actor',
+            attributes: ['ID', 'UserName']
+          }
+        ],
+        order: [['ActionDate', 'DESC']]
+      });
+      
+      const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
+        where: { LinkId: LinkID },
+        raw: true
+      });
+      
+      const restrictions = await db.DocumentRestrictions.findAll({
+        where: { LinkID: LinkID, UserID: userId },
+        order: [['CreatedDate', 'DESC']]
+      });
+      
+      const templates = await db.Template.findAll({ raw: true });
+      const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+      const docwith={
+        document:[{ ...docJson, filepath: null }],
+        versions:versions,
+        collaborations:[],
+        comments:[],
+        auditTrails:auditTrails,
+        restrictions:restrictions,
+        OCRDocumentReadFields:OCRDocumentReadFields,
+        approvalsforusertoacceptorreject:[]
+      };
+      return res.status(200).json({ success: true, data: docwith });
+    }
 
      // Log view activity
      await logAuditTrail(documentId, 'VIEWED', req.user.id, null, null, req, LinkID);
@@ -1656,7 +1680,7 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
          {
            model: db.Users,
            as: 'actor',
-           attributes: ['id', 'userName']
+           attributes: ['ID', 'UserName']
          }
        ],
        order: [['ActionDate', 'DESC']]
