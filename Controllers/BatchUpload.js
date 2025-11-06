@@ -413,6 +413,42 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                     throw dbErr;
                 }
 
+                // Create initial DocumentVersions entry if it doesn't exist
+                try {
+                    const existingVersion = await db.DocumentVersions.findOne({
+                        where: { 
+                            DocumentID: document.ID,
+                            LinkID: document.LinkID,
+                            IsCurrentVersion: true,
+                            Active: true
+                        }
+                    });
+
+                    if (!existingVersion) {
+                        // Mark any existing versions as not current
+                        await db.DocumentVersions.update(
+                            { IsCurrentVersion: false },
+                            { where: { LinkID: document.LinkID } }
+                        );
+
+                        // Create initial version entry
+                        await db.DocumentVersions.create({
+                            DocumentID: document.ID,
+                            LinkID: document.LinkID,
+                            VersionNumber: '1',
+                            ModificationDate: document.CreatedDate || new Date(),
+                            ModifiedBy: document.Createdby || rowData['Created By'] || 'System',
+                            Changes: JSON.stringify({ action: documentStatus === 'inserted' ? 'Initial creation' : 'Updated via batch upload' }),
+                            IsCurrentVersion: true,
+                            Active: true
+                        });
+                        logger.info(`Created initial version for document ${fileName} (ID: ${document.ID})`);
+                    }
+                } catch (versionErr) {
+                    logger.warn(`Failed to create version entry for ${fileName}: ${versionErr.message}`);
+                    // Don't fail the whole batch if version creation fails
+                }
+
                 // Materialize a PDF/Image to disk if available, now that we have a persisted document
                 if (document && document.DataImage && document.DataImage.length > 0) {
                     const dir = path.join(__dirname, `../public/images/templates/document_${document.ID}`);
