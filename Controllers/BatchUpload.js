@@ -11,6 +11,7 @@ const ExcelJS = require('exceljs'); // Excel file reading/writing
 const Tesseract = require('tesseract.js'); // OCR engine wrapper
 const { PDFDocument } = require('pdf-lib'); // PDF manipulation (splitting, merging)
 const winston = require('winston'); // Logging library
+const AdmZip = require('adm-zip'); // ZIP file extraction
 require('dotenv').config();        // Load environment variables from .env
 // const { convert } = require('pdf-poppler');
 const convertPdfBufferToImages=require("../utils/pdftoimages_1")
@@ -191,8 +192,167 @@ async function readExcelData(filePath) {
      } catch (error) {
          logger.error(`Error reading Excel file: ${error.message}`);
          throw error;
-     }
- }
+    }
+}
+
+// --- ZIP Processing Functions ---
+
+/**
+ * Extracts a ZIP file to a temporary directory
+ * @param {string} zipPath Path to the ZIP file
+ * @param {string} extractDir Directory to extract to
+ * @returns {Promise<void>}
+ */
+async function extractZipFile(zipPath, extractDir) {
+    try {
+        await fs.mkdir(extractDir, { recursive: true });
+        const zip = new AdmZip(zipPath);
+        zip.extractAllTo(extractDir, true); // Overwrite existing files
+        logger.info(`ZIP file extracted to: ${extractDir}`);
+    } catch (error) {
+        logger.error(`Error extracting ZIP file: ${error.message}`);
+        throw new Error(`Failed to extract ZIP file: ${error.message}`);
+    }
+}
+
+/**
+ * Finds Excel file in extracted directory (recursive search)
+ * @param {string} dir Directory to search
+ * @returns {Promise<string|null>} Path to Excel file or null if not found
+ */
+async function findExcelInDirectory(dir) {
+    const excelExtensions = ['.xlsx', '.xls', '.csv'];
+    const files = await fs.readdir(dir, { withFileTypes: true });
+    
+    for (const file of files) {
+        const fullPath = path.join(dir, file.name);
+        
+        if (file.isDirectory()) {
+            // Recursive search in subdirectories
+            const found = await findExcelInDirectory(fullPath);
+            if (found) return found;
+        } else {
+            const ext = path.extname(file.name).toLowerCase();
+            if (excelExtensions.includes(ext)) {
+                logger.info(`Found Excel file: ${fullPath}`);
+                return fullPath;
+            }
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Builds a map of all files in extracted directory for case-insensitive matching
+ * @param {string} dir Directory to scan
+ * @returns {Promise<Map<string, string>>} Map of lowercase filename -> full path
+ */
+async function buildFileMap(dir) {
+    const fileMap = new Map();
+    
+    async function scanDirectory(currentDir) {
+        const entries = await fs.readdir(currentDir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            
+            if (entry.isDirectory()) {
+                await scanDirectory(fullPath);
+            } else {
+                // Store with lowercase key for case-insensitive matching
+                const lowerName = entry.name.toLowerCase();
+                const nameWithoutExt = path.parse(entry.name).name.toLowerCase();
+                
+                // Store by full name
+                fileMap.set(lowerName, fullPath);
+                // Also store by name without extension
+                fileMap.set(nameWithoutExt, fullPath);
+            }
+        }
+    }
+    
+    await scanDirectory(dir);
+    logger.info(`Built file map with ${fileMap.size} entries`);
+    return fileMap;
+}
+
+/**
+ * Matches a filename from Excel row to a file in the extracted ZIP
+ * @param {string} fileName File name from Excel row
+ * @param {Map<string, string>} fileMap Map of files from ZIP
+ * @returns {string|null} Path to matched file or null
+ */
+function matchFileToRow(fileName, fileMap) {
+    if (!fileName) return null;
+    
+    // Try exact match (case-insensitive)
+    const lowerName = fileName.toLowerCase();
+    if (fileMap.has(lowerName)) {
+        return fileMap.get(lowerName);
+    }
+    
+    // Try with common extensions if not present
+    const extensions = ['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx', '.txt'];
+    for (const ext of extensions) {
+        const withExt = lowerName + ext;
+        if (fileMap.has(withExt)) {
+            return fileMap.get(withExt);
+        }
+    }
+    
+    // Try name without extension (in case Excel has extension but file doesn't)
+    const nameWithoutExt = path.parse(fileName).name.toLowerCase();
+    if (fileMap.has(nameWithoutExt)) {
+        return fileMap.get(nameWithoutExt);
+    }
+    
+    // Try partial match (e.g., "SampleDoc" matches "SampleDoc.pdf")
+    for (const [key, filePath] of fileMap.entries()) {
+        if (key.includes(nameWithoutExt) || nameWithoutExt.includes(key)) {
+            return filePath;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Reads file and detects its type
+ * @param {string} filePath Path to file
+ * @returns {Promise<{buffer: Buffer, type: string}>}
+ */
+async function readFileWithType(filePath) {
+    const buffer = await fs.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    
+    // Map extensions to types
+    const typeMap = {
+        'pdf': 'pdf',
+        'png': 'png',
+        'jpg': 'jpg',
+        'jpeg': 'jpeg',
+        'doc': 'doc',
+        'docx': 'docx',
+        'txt': 'txt'
+    };
+    
+    const type = typeMap[ext] || ext || 'unknown';
+    return { buffer, type };
+}
+
+/**
+ * Cleans up temporary directory
+ * @param {string} dir Directory to remove
+ */
+async function cleanupTempDirectory(dir) {
+    try {
+        await fs.rm(dir, { recursive: true, force: true });
+        logger.info(`Cleaned up temp directory: ${dir}`);
+    } catch (error) {
+        logger.warn(`Failed to cleanup temp directory ${dir}: ${error.message}`);
+    }
+}
 
 // --- PDF Processing (Simplified, as tesseract.js often handles PDF directly) ---
 
@@ -305,16 +465,63 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
         logger.error('Missing required department fields: dep or subdep not provided');
         return res.status(400).json({ error: 'Missing required fields: dep and subdep are required for batch upload.' });
     }
-    const excelFilePath = path.join(__dirname, '../public/uploads/batchupload', req.file.filename);
-    //console.log("excelFilePath",excelFilePath)
-    // const excelFilePath = path.join(__dirname, 'uploads', 'BatchUpload.xlsx');
+    
+    const uploadedFilePath = path.join(__dirname, '../public/uploads/batchupload', req.file.filename);
+    const uploadedFileExt = path.extname(req.file.originalname).toLowerCase();
+    const isZipFile = req.body?.isZip === 'true' || 
+                      uploadedFileExt === '.zip' || 
+                      req.file.mimetype === 'application/zip' || 
+                      req.file.mimetype === 'application/x-zip-compressed';
+    
+    let excelFilePath;
+    let extractedZipDir = null;
+    let fileMap = null;
+
+    // Handle ZIP file extraction
+    if (isZipFile) {
+        logger.info(`ZIP file detected: ${req.file.originalname}`);
+        try {
+            // Create temp directory for extraction
+            const timestamp = Date.now();
+            extractedZipDir = path.join(__dirname, '../temp', `zip_extract_${timestamp}_${uuidv4()}`);
+            
+            // Extract ZIP
+            await extractZipFile(uploadedFilePath, extractedZipDir);
+            
+            // Find Excel file in extracted directory
+            excelFilePath = await findExcelInDirectory(extractedZipDir);
+            
+            if (!excelFilePath) {
+                await cleanupTempDirectory(extractedZipDir);
+                return res.status(400).json({ 
+                    error: 'No Excel file (.xlsx, .xls, or .csv) found in ZIP archive.' 
+                });
+            }
+            
+            // Build file map for matching
+            fileMap = await buildFileMap(extractedZipDir);
+            logger.info(`ZIP extracted successfully. Excel found: ${excelFilePath}`);
+            
+        } catch (zipError) {
+            logger.error(`ZIP extraction failed: ${zipError.message}`);
+            if (extractedZipDir) {
+                await cleanupTempDirectory(extractedZipDir);
+            }
+            return res.status(400).json({ 
+                error: `Failed to process ZIP file: ${zipError.message}` 
+            });
+        }
+    } else {
+        // Regular Excel file
+        excelFilePath = uploadedFilePath;
+    }
 
     if (!excelFilePath) {
         logger.error('Missing filePath query parameter.');
         return res.status(400).json({ error: 'Missing filePath query parameter. Usage: /process-excel?filePath=C:/path/to/your/input.xlsx' });
     }
 
-    logger.info(`Received request to process Excel file: ${excelFilePath}`);
+    logger.info(`Received request to process ${isZipFile ? 'ZIP with' : ''} Excel file: ${excelFilePath}`);
 
     try {
         let stats;
@@ -322,10 +529,12 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
             stats = await fs.stat(excelFilePath);
             if (!stats.isFile()) {
                 logger.error(`Error: '${excelFilePath}' is not a file.`);
+                if (extractedZipDir) await cleanupTempDirectory(extractedZipDir);
                 return res.status(400).json({ error: `'${excelFilePath}' is not a valid file.` });
             }
         } catch (err) {
             logger.error(`Error accessing file '${excelFilePath}': ${err.message}`);
+            if (extractedZipDir) await cleanupTempDirectory(extractedZipDir);
             return res.status(400).json({ error: `Cannot access file '${excelFilePath}'. Ensure path is correct and permissions are granted.` });
         }
 
@@ -359,6 +568,7 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
             }
 
             let documentStatus = 'pending';
+            let fileMatched = false; // Track if file was matched from ZIP
 
             try {
                 const serverDate = getServerDateTime();
@@ -431,6 +641,54 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                 } catch (dbErr) {
                     logger.error(`DB error for ${fileName}: ${dbErr.message}`);
                     throw dbErr;
+                }
+
+                // Match and upload file from ZIP if available
+                if (fileMap && isZipFile) {
+                    try {
+                        const matchedFilePath = matchFileToRow(fileName, fileMap);
+                        
+                        if (matchedFilePath) {
+                            fileMatched = true;
+                            logger.info(`Matched file for ${fileName}: ${matchedFilePath}`);
+                            
+                            // Read file and get type
+                            const { buffer, type } = await readFileWithType(matchedFilePath);
+                            
+                            // Calculate page count if PDF
+                            let pageCount = 0;
+                            if (type === 'pdf') {
+                                try {
+                                    pageCount = await calculatePageCount(buffer, 'application/pdf');
+                                } catch (pageErr) {
+                                    logger.warn(`Error calculating page count for ${fileName}: ${pageErr.message}`);
+                                    pageCount = rowData['Page Count'] || 0;
+                                }
+                            } else {
+                                pageCount = rowData['Page Count'] || 0;
+                            }
+                            
+                            // Update document with file data
+                            const fileUpdateData = {
+                                DataImage: buffer,
+                                DataName: path.basename(matchedFilePath),
+                                DataType: type,
+                                PageCount: pageCount > 0 ? pageCount : null
+                            };
+                            
+                            await db.Documents.update(fileUpdateData, { where: { ID: document.ID } });
+                            
+                            // Refresh document to get updated data
+                            document = await db.Documents.findOne({ where: { ID: document.ID } });
+                            
+                            logger.info(`File uploaded successfully for ${fileName} (Type: ${type}, Size: ${buffer.length} bytes)`);
+                        } else {
+                            logger.warn(`No matching file found in ZIP for ${fileName}`);
+                        }
+                    } catch (fileErr) {
+                        logger.error(`Error uploading file for ${fileName}: ${fileErr.message}`);
+                        // Don't fail the whole process, just log the error
+                    }
                 }
 
                 // Create initial DocumentVersions entry if it doesn't exist
@@ -700,19 +958,36 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                 }
 
                 successfulUpdates++;
-                processedDocuments.push({ fileName, status: documentStatus });
+                const resultEntry = { fileName, status: documentStatus };
+                if (isZipFile) {
+                    resultEntry.fileMatched = fileMatched;
+                    if (!fileMatched) {
+                        resultEntry.error = 'File not found in ZIP';
+                    }
+                }
+                processedDocuments.push(resultEntry);
               
             } catch (err) {
                 logger.error(`Failed to process document ${fileName}: ${err.message}`);
                 console.log("err",err)
-                processedDocuments.push({ fileName, status: `Failed: ${err.message}`, error: err.message });
+                const errorEntry = { fileName, status: `Failed: ${err.message}`, error: err.message };
+                if (isZipFile) {
+                    errorEntry.fileMatched = false;
+                }
+                processedDocuments.push(errorEntry);
                 failedUpdates++;
             }
         }
 
         logger.info('Batch processing completed.');
+        
+        // Cleanup extracted ZIP directory if it exists
+        if (extractedZipDir) {
+            await cleanupTempDirectory(extractedZipDir);
+        }
+        
         return res.status(200).json({
-            message: 'Batch processing completed.',
+            message: isZipFile ? 'ZIP processing completed.' : 'Batch processing completed.',
             totalDocuments: excelDataTable.length,
             successfulUpdates,
             failedUpdates,
@@ -722,7 +997,13 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
     } catch (mainError) {
         logger.error(`Unhandled error: ${mainError.message}`);
         logger.error(mainError.stack);
-        console.log(mainError)
+        console.log(mainError);
+        
+        // Cleanup extracted ZIP directory on error
+        if (extractedZipDir) {
+            await cleanupTempDirectory(extractedZipDir);
+        }
+        
         return res.status(500).json({ error: 'Internal server error during batch processing.', details: mainError.message });
     }
 });
