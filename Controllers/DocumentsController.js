@@ -7,7 +7,8 @@ const fsPromises = require('fs').promises;
 
 const { spawn } = require('child_process');
 const router = express.Router();
-const db = require('../config/database'); 
+const db = require('../config/database');
+const { checkUserPermission } = require('../utils/checkPermission'); 
 const DocumentApprovers = db.DocumentApprovers;
 const { calculatePageCount } = require('../utils/calculatePageCount');
 // Configure multer for file uploads
@@ -638,6 +639,7 @@ Description
 router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
   try {
     const { id,dataImage } = req.body;
+    const userId = req.user.id;
     
     // Validate required id field
     if (!id) {
@@ -658,6 +660,23 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     }
     
     const linkid = document.LinkID;
+    const departmentId = document.DepartmentId;
+    const subDepartmentId = document.SubDepartmentId;
+    
+    // Check if user has Edit permission
+    const hasEditPermission = await checkUserPermission(
+      userId, 
+      departmentId, 
+      subDepartmentId, 
+      'Edit'
+    );
+    
+    if (!hasEditPermission) {
+      return res.status(403).json({
+        status: false,
+        message: 'You do not have permission to edit documents in this department and document type'
+      });
+    }
 
     // Extract optional fields with fallback to existing values
     const {
@@ -855,6 +874,7 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
   // This is identical to the edit POST route in the original controller
   // You may want to modify this to actually create new documents
   try {
+    const userId = req.user.id;
     const {
        Text1, Date1, Text2, Date2, Text3, Date3,
       Text4, Date4, Text5, Date5, Text6, Date6, Text7, Date7,
@@ -862,6 +882,32 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
       expiration, confidential, expdate, remarks, id, dep, subdep, publishing_status,FileDescription,
       Description,filename
     } = req.body;
+    
+    // Validate required fields
+    if (!dep || !subdep) {
+      return res.json({
+        status: false,
+        message: 'Department and SubDepartment are required'
+      });
+    }
+    
+    const departmentId = parseInt(dep);
+    const subDepartmentId = parseInt(subdep);
+    
+    // Check if user has Add permission
+    const hasAddPermission = await checkUserPermission(
+      userId, 
+      departmentId, 
+      subDepartmentId, 
+      'Add'
+    );
+    
+    if (!hasAddPermission) {
+      return res.status(403).json({
+        status: false,
+        message: 'You do not have permission to upload documents in this department and document type'
+      });
+    }
     // const filename= req.file ? req.file.originalname : "";
     const buffer = req.file ? req.file.buffer : null;
     const filedate= req.file ? new Date() : new Date();
@@ -996,17 +1042,42 @@ console.log("req.user",req.user)
 router.delete('/delete/:documentID',requireAuth, async (req, res) => {
   try {
     const { documentID } = req.params;
+    const userId = req.user.id;
     
-const documentbypk=await db.Documents.findByPk(documentID)
-    const linkid=documentbypk.LinkID
-   
+    const documentbypk = await db.Documents.findByPk(documentID);
+    if (!documentbypk) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+    
+    const linkid = documentbypk.LinkID;
+    const departmentId = documentbypk.DepartmentId;
+    const subDepartmentId = documentbypk.SubDepartmentId;
+    
+    // Check if user has Delete permission
+    const hasDeletePermission = await checkUserPermission(
+      userId, 
+      departmentId, 
+      subDepartmentId, 
+      'Delete'
+    );
+    
+    if (!hasDeletePermission) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to delete documents in this department and document type'
+      });
+    }
 
+    // Soft delete: Set Active = false
     await db.Documents.update(
       { Active: false },
       { where: { LinkID: linkid } }
     );
 
-    await logAuditTrail(documentID, 'DOCUMENT_REMOVED', req.user.id, "deleted", null, req, linkid);
+    await logAuditTrail(documentID, 'DOCUMENT_REMOVED', userId, "deleted", null, req, linkid);
 
     res.status(200).json({
       success: true,
@@ -1569,6 +1640,41 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        return res.status(404).json({ success: false, message: 'Document not found' });
      }
      const LinkID=latestestdocument.LinkID
+     const departmentId = latestestdocument.DepartmentId;
+     const subDepartmentId = latestestdocument.SubDepartmentId;
+     const isConfidential = latestestdocument.Confidential === true || latestestdocument.Confidential === 1;
+     
+     // Check if user has View permission
+     const hasViewPermission = await checkUserPermission(
+       userId, 
+       departmentId, 
+       subDepartmentId, 
+       'View'
+     );
+     
+     if (!hasViewPermission) {
+       return res.status(403).json({
+         success: false,
+         message: 'You do not have permission to view documents in this department and document type'
+       });
+     }
+     
+     // If document is confidential, check Confidential permission
+     if (isConfidential) {
+       const hasConfidentialPermission = await checkUserPermission(
+         userId, 
+         departmentId, 
+         subDepartmentId, 
+         'Confidential'
+       );
+       
+       if (!hasConfidentialPermission) {
+         return res.status(403).json({
+           success: false,
+           message: 'You do not have permission to view confidential documents in this department and document type'
+         });
+       }
+     }
      // ⚡ IMPORTANT: Fetch document with DataImage for detail view
      const document = await db.Documents.findOne({
        where: { LinkID: LinkID, Active: true },

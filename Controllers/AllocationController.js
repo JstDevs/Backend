@@ -934,6 +934,114 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
     }
 });
 
+// GET fields and user permissions by Department, SubDepartment, and User
+// Route: /allocation/fields/:departmentId/:subDepartmentId/:userId
+router.get('/fields/:departmentId/:subDepartmentId/:userId', async (req, res) => {
+    try {
+        const { departmentId, subDepartmentId, userId } = req.params;
+        
+        // Find the assigned subdepartment to get the LinkID
+        // First try with UserID, if not found, try without UserID (shared LinkID)
+        let assignedSubDep = await AssignSubdepartment.findOne({
+            where: { 
+                DepartmentID: departmentId, 
+                SubDepartmentID: subDepartmentId, 
+                UserID: userId,
+                Active: true 
+            }
+        });
+        
+        // If not found with UserID, try to find any assignment for this dept/subdept
+        if (!assignedSubDep) {
+            assignedSubDep = await AssignSubdepartment.findOne({
+                where: { 
+                    DepartmentID: departmentId, 
+                    SubDepartmentID: subDepartmentId, 
+                    Active: true 
+                }
+            });
+        }
+        
+        if (!assignedSubDep) {
+            return res.json({ 
+                success: true, 
+                data: { 
+                    fields: [], 
+                    userPermissions: {
+                        View: false,
+                        Add: false,
+                        Edit: false,
+                        Delete: false,
+                        Print: false,
+                        Confidential: false,
+                        Comment: false,
+                        Collaborate: false,
+                        Finalize: false,
+                        Masking: false
+                    }
+                } 
+            });
+        }
+        
+        const linkID = assignedSubDep.LinkID;
+        
+        // Fetch fields for this LinkID
+        const fields = await Fields.findAll({
+            where: { LinkID: linkID },
+            order: [['FieldNumber', 'ASC']]
+        });
+        
+        // Fetch user permissions for this LinkID and UserID
+        const userPermissions = await DocumentAccess.findOne({
+            where: { 
+                LinkID: linkID, 
+                UserID: userId,
+                Active: true 
+            }
+        });
+        
+        // Format permissions (default to false if not found)
+        const permissions = userPermissions ? {
+            View: userPermissions.View || false,
+            Add: userPermissions.Add || false,
+            Edit: userPermissions.Edit || false,
+            Delete: userPermissions.Delete || false,
+            Print: userPermissions.Print || false,
+            Confidential: userPermissions.Confidential || false,
+            Comment: userPermissions.Comment || false,
+            Collaborate: userPermissions.Collaborate || false,
+            Finalize: userPermissions.Finalize || false,
+            Masking: userPermissions.Masking || false
+        } : {
+            View: false,
+            Add: false,
+            Edit: false,
+            Delete: false,
+            Print: false,
+            Confidential: false,
+            Comment: false,
+            Collaborate: false,
+            Finalize: false,
+            Masking: false
+        };
+        
+        return res.json({
+            success: true,
+            data: {
+                fields: fields,
+                userPermissions: permissions
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching fields and permissions:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch fields and permissions',
+            details: error.message 
+        });
+    }
+});
+
 // GET allocations by LinkID - /allocation/by-link/:id
 router.get('/by-link/:id', async (req, res) => {
     try {
