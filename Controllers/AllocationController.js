@@ -450,83 +450,175 @@ router.post('/add-user', requireAuth, async (req, res) => {
             Comment = false, Collaborate = false, Finalize = false, Masking = false,
             fields
         } = req.body;
-            const existing = await db.AssignSubDepartment.findOne({
-                        where: {
-                            UserID: userid,
-                            DepartmentID: depid,
-                            SubDepartmentID: subdepid
-                        }
-                        });
-                        console.log("ex",existing)
-            if (existing) {
-            return res.status(409).json({ error: 'User already assigned to this department and subdepartment' });
-            }
+        
         const createdBy = req.user.userName || null;
-        const subDepartment = await db.AssignSubDepartment.findOne({
-            where: { SubDepartmentID: subdepid, DepartmentID: depid, Active: true,UserID:userid }
-        });
-
-        const linkid = subDepartment?.LinkID || parseInt(generateLinkID());
         const createdDate = new Date();
-        if(!subDepartment){
+        
+        // Check if user already has an allocation for this dept/subdept combination
+        // by checking AssignSubDepartment first
+        const userAssignSubDep = await db.AssignSubDepartment.findOne({
+            where: {
+                UserID: userid,
+                DepartmentID: depid,
+                SubDepartmentID: subdepid
+            }
+        });
+        
+        let linkid;
+        let isUpdate = false;
+        
+        if (userAssignSubDep) {
+            // User already has an AssignSubDepartment record, use its LinkID
+            linkid = userAssignSubDep.LinkID;
+            
+            // Check if DocumentAccess exists for this LinkID and UserID
+            const existingAccess = await DocumentAccess.findOne({
+                where: { LinkID: linkid, UserID: userid }
+            });
+            
+            if (existingAccess) {
+                // Update existing allocation
+                await DocumentAccess.update({
+                    Active: true,
+                    View: View,
+                    Add: Add,
+                    fields: fields,
+                    Edit: Edit,
+                    Delete: Delete,
+                    Print: Print,
+                    Confidential: Confidential,
+                    Comment: Comment,
+                    Collaborate: Collaborate,
+                    Finalize: Finalize,
+                    Masking: Masking
+                }, {
+                    where: { LinkID: linkid, UserID: userid }
+                });
+                
+                // Ensure AssignSubDepartment is active
+                if (!userAssignSubDep.Active) {
+                    await db.AssignSubDepartment.update(
+                        { Active: true },
+                        { where: { LinkID: linkid, UserID: userid, DepartmentID: depid, SubDepartmentID: subdepid } }
+                    );
+                }
+                
+                return res.json({
+                    status: true,
+                    message: 'Allocation updated successfully'
+                });
+            }
+        } else {
+            // User doesn't have an AssignSubDepartment record yet
+            // Check if there's an existing LinkID for this dept/subdept (shared by other users)
+            const existingAssignSubDep = await db.AssignSubDepartment.findOne({
+                where: { 
+                    DepartmentID: depid, 
+                    SubDepartmentID: subdepid, 
+                    Active: true 
+                }
+            });
+            
+            if (existingAssignSubDep) {
+                // Reuse existing LinkID for this dept/subdept
+                linkid = existingAssignSubDep.LinkID;
+                
+                // Check if DocumentAccess already exists (shouldn't happen, but check anyway)
+                const existingAccess = await DocumentAccess.findOne({
+                    where: { LinkID: linkid, UserID: userid }
+                });
+                
+                if (existingAccess) {
+                    // Update existing
+                    await DocumentAccess.update({
+                        Active: true,
+                        View: View,
+                        Add: Add,
+                        fields: fields,
+                        Edit: Edit,
+                        Delete: Delete,
+                        Print: Print,
+                        Confidential: Confidential,
+                        Comment: Comment,
+                        Collaborate: Collaborate,
+                        Finalize: Finalize,
+                        Masking: Masking
+                    }, {
+                        where: { LinkID: linkid, UserID: userid }
+                    });
+                    isUpdate = true;
+                }
+            } else {
+                // No existing assignment for this dept/subdept, create new LinkID
+                linkid = parseInt(generateLinkID());
+            }
+        }
+        
+        // Create AssignSubDepartment record if it doesn't exist
+        if (!userAssignSubDep) {
             await db.AssignSubDepartment.create({
                 LinkID: linkid,
                 DepartmentID: depid,
                 SubDepartmentID: subdepid,
-                UserID:userid,
+                UserID: userid,
                 Active: true,
                 CreatedBy: createdBy,
                 CreatedDate: createdDate
             });
         }
-        const existingAccess = await DocumentAccess.findOne({
-            where: { LinkID: linkid, UserID: userid }
-        });
-
-        if (existingAccess) {
-            await DocumentAccess.update({
-                Active: true,
-                View: View,
-                Add: Add,
-                fields:fields,
-                Edit: Edit,
-                Delete: Delete,
-                Print: Print,
-                Confidential: Confidential,
-                Comment: Comment,
-                Collaborate: Collaborate,
-                Finalize: Finalize,
-                Masking: Masking
-            }, {
+        
+        // Create DocumentAccess if it doesn't exist (or update if it does)
+        if (!isUpdate) {
+            const existingAccess = await DocumentAccess.findOne({
                 where: { LinkID: linkid, UserID: userid }
             });
-        } else {
-            await DocumentAccess.create({
-                LinkID: linkid,
-                UserID: userid,
-                View: View,
-                Add: Add,
-                Edit: Edit,
-                fields:fields,
-                Delete: Delete,
-                Print: Print,
-                Confidential: Confidential,
-                Comment: Comment,
-                Collaborate: Collaborate,
-                Finalize: Finalize,
-                Masking: Masking,
-                Active: true,
-                CreatedBy: createdBy,
-                CreatedDate: createdDate
-            });
+
+            if (existingAccess) {
+                await DocumentAccess.update({
+                    Active: true,
+                    View: View,
+                    Add: Add,
+                    fields: fields,
+                    Edit: Edit,
+                    Delete: Delete,
+                    Print: Print,
+                    Confidential: Confidential,
+                    Comment: Comment,
+                    Collaborate: Collaborate,
+                    Finalize: Finalize,
+                    Masking: Masking
+                }, {
+                    where: { LinkID: linkid, UserID: userid }
+                });
+            } else {
+                await DocumentAccess.create({
+                    LinkID: linkid,
+                    UserID: userid,
+                    View: View,
+                    Add: Add,
+                    Edit: Edit,
+                    fields: fields,
+                    Delete: Delete,
+                    Print: Print,
+                    Confidential: Confidential,
+                    Comment: Comment,
+                    Collaborate: Collaborate,
+                    Finalize: Finalize,
+                    Masking: Masking,
+                    Active: true,
+                    CreatedBy: createdBy,
+                    CreatedDate: createdDate
+                });
+            }
         }
 
         res.json({
             status: true,
+            message: isUpdate ? 'Allocation updated successfully' : 'Allocation created successfully'
         });
     } catch (error) {
         console.error('Error in add-user POST route:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
 
