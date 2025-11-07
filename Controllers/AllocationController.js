@@ -163,7 +163,14 @@ router.get('/', async (req, res) => {
         const finalListJson = req.session.FinalList;
         
         if (finalListJson) {
-            const finalList = JSON.parse(finalListJson);
+            let finalList;
+            try {
+                finalList = JSON.parse(finalListJson);
+            } catch (parseError) {
+                console.error('Error parsing FinalList from session:', parseError);
+                delete req.session.FinalList;
+                finalList = [];
+            }
             req.viewData.DepartmentList = finalList;
             
             const firstList = finalList[0];
@@ -368,20 +375,17 @@ router.post('/delete/:linkID', async (req, res) => {
 
 router.delete('/delete-user/:depid/:subdepid/:userid', async (req, res) => {
     try {
-        const { depid, subdepid, userid
-
-         } = req.params;
+        const { depid, subdepid, userid } = req.params;
         
-        await db.AssignSubDepartment.destroy(
-            
-            {  where: {
-                            UserID: userid,
-                            DepartmentID: depid,
-                            SubDepartmentID: subdepid
-                        } }
-        );
+        await db.AssignSubDepartment.destroy({
+            where: {
+                UserID: userid,
+                DepartmentID: depid,
+                SubDepartmentID: subdepid
+            }
+        });
 
-       return res.json({
+        return res.json({
             status: true,   
         });
     } catch (error) {
@@ -839,7 +843,7 @@ router.post('/load-fields', async (req, res) => {
 //get documeent access based on department and subdepartment
 router.get('/document-access', async (req, res) => {
     try {
-        const { depid, subdepid,userid } = req.body;
+        const { depid, subdepid, userid } = req.query;
         
         if (!depid || !subdepid ) {
             return res.status(400).json({ error: 'Missing required parameters' });
@@ -859,8 +863,9 @@ router.get('/document-access', async (req, res) => {
                 attributes: ['ID', 'UserName'] // Include only necessary user fields
             }]
         });
-        const newassingedsubdep=JSON.parse(JSON.stringify(assingedSubDep))
-        newassingedsubdep.docuAccess=docuAccess
+        // Create a safe copy of the object to avoid circular references
+        const newassingedsubdep = JSON.parse(JSON.stringify(assingedSubDep));
+        newassingedsubdep.docuAccess = docuAccess;
         res.json({
             status: true,
             documentAccess: newassingedsubdep
@@ -876,10 +881,10 @@ router.get('/document-access', async (req, res) => {
 // make new function
 router.get('/existing-users', async (req, res) => {
     try {
-        // const assignedSubDeps = await AssignSubdepartment.findAll({
-        //     where: { Active: true },
-        // });
-        const assignedSubDeps = await AssignSubdepartment.findAll();
+        // Only fetch active records to prevent loading massive datasets
+        const assignedSubDeps = await AssignSubdepartment.findAll({
+            where: { Active: true }
+        });
 
         res.json({
             status: true,
@@ -895,20 +900,19 @@ router.delete('/delete-existing-user', async (req, res) => {
     try {
         const { depid, subdepid, userid } = req.query;
 
-        await db.AssignSubDepartment.destroy(
-            
-            {  where: {
-                            UserID: userid,
-                            DepartmentID: depid,
-                            SubDepartmentID: subdepid
-                        } }
-        );
+        await db.AssignSubDepartment.destroy({
+            where: {
+                UserID: userid,
+                DepartmentID: depid,
+                SubDepartmentID: subdepid
+            }
+        });
 
-       return res.json({
-            status: true,
+        return res.json({
+            status: true,   
         });
     } catch (error) {
-        console.error('Error in delete-user route:', error);
+        console.error('Error in delete-existing-user route:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
