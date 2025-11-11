@@ -56,6 +56,75 @@ function buildWhereClause(search) {
   return where;
 }
 
+/**
+ * Parse version string into major and minor components
+ * @param {string} versionString - e.g., "v1", "v1.1", "v2.3"
+ * @returns {Object} { major: number, minor: number | null }
+ */
+function parseVersion(versionString) {
+  if (!versionString || typeof versionString !== 'string') {
+    return { major: 1, minor: null };
+  }
+  
+  // Remove 'v' prefix (case insensitive)
+  const version = versionString.replace(/^v/i, '');
+  
+  // Split by dot
+  const parts = version.split('.');
+  
+  const major = parseInt(parts[0], 10) || 1;
+  const minor = parts.length > 1 ? parseInt(parts[1], 10) : null;
+  
+  return { major, minor };
+}
+
+/**
+ * Calculate next version based on flags
+ * @param {string} currentVersion - Current version string (e.g., "v1", "v1.1")
+ * @param {boolean} isMinorVersion - If true, create minor version
+ * @param {boolean} finalize - If true, finalize and bump major version
+ * @returns {string} New version string
+ */
+function incrementVersion(currentVersion, isMinorVersion, finalize) {
+  console.log('🔍 [incrementVersion] Called with:');
+  console.log('  - currentVersion:', currentVersion);
+  console.log('  - isMinorVersion:', isMinorVersion, '(type:', typeof isMinorVersion, ')');
+  console.log('  - finalize:', finalize, '(type:', typeof finalize, ')');
+  
+  const { major, minor } = parseVersion(currentVersion);
+  console.log('  - Parsed: major=', major, ', minor=', minor);
+  
+  // Finalize takes priority: bump major, reset minor
+  if (finalize) {
+    const result = `v${major + 1}`;
+    console.log('  - Finalize=true, returning:', result);
+    return result;
+  }
+  
+  // Minor version: increment minor, or create .1 if none exists
+  if (isMinorVersion) {
+    let result;
+    if (minor === null) {
+      result = `v${major}.1`;
+    } else {
+      result = `v${major}.${minor + 1}`;
+    }
+    console.log('  - isMinorVersion=true, returning:', result);
+    return result;
+  }
+  
+  // Default: treat as minor version (backward compatibility)
+  // This ensures existing code without flags still works
+  let result;
+  if (minor === null) {
+    result = `v${major}.1`;
+  } else {
+    result = `v${major}.${minor + 1}`;
+  }
+  console.log('  - Default (backward compatibility), returning:', result);
+  return result;
+}
+
 
 async function processDocument(doc, restrictions, OCRFields, templates, skipCache = false) {
   const restrictions_open_draw = restrictions.map(r => r.dataValues);
@@ -638,6 +707,30 @@ Description
 });
 router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
   try {
+    // ============================================
+    // 🚀 NEW VERSIONING CODE - IF YOU SEE THIS, NEW CODE IS RUNNING
+    // ============================================
+    console.log('🚀🚀🚀 [NEW EDIT ENDPOINT] Request received - NEW VERSIONING CODE ACTIVE 🚀🚀🚀');
+    console.log('🚀 [EDIT ENDPOINT] req.body keys:', Object.keys(req.body));
+    
+    // Safely log req.body (avoid circular references and buffers)
+    const safeBody = {};
+    Object.keys(req.body).forEach(key => {
+      const value = req.body[key];
+      if (Buffer.isBuffer(value)) {
+        safeBody[key] = `[Buffer ${value.length} bytes]`;
+      } else if (typeof value === 'object' && value !== null) {
+        try {
+          safeBody[key] = JSON.stringify(value);
+        } catch (e) {
+          safeBody[key] = '[Object]';
+        }
+      } else {
+        safeBody[key] = value;
+      }
+    });
+    console.log('🚀 [EDIT ENDPOINT] req.body (safe):', JSON.stringify(safeBody, null, 2));
+    
     const { id,dataImage } = req.body;
     const userId = req.user.id;
     
@@ -684,8 +777,43 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       Text4, Date4, Text5, Date5, Text6, Date6, Text7, Date7,
       Text8, Date8, Text9, Date9, Text10, Date10,
       expiration, confidential, expdate, remarks, dep, subdep,
-      publishing_status, FileDescription, Description
+      publishing_status, FileDescription, Description,
+      isMinorVersion, finalize
     } = req.body;
+
+    // DEBUG: Log raw values received from request
+    console.log('🔍 [VERSION DEBUG] Raw flags received:');
+    console.log('  - isMinorVersion (raw):', isMinorVersion, '(type:', typeof isMinorVersion, ')');
+    console.log('  - finalize (raw):', finalize, '(type:', typeof finalize, ')');
+    console.log('  - req.body keys:', Object.keys(req.body).filter(k => k === 'isMinorVersion' || k === 'finalize'));
+
+    // Extract and normalize version flags
+    // Handle both string and boolean values from FormData
+    // FormData sends strings, so "true" string should be converted to boolean
+    // Important: Only treat as true if explicitly "true", otherwise false
+    const isMinorVersionFlag = (
+      isMinorVersion !== undefined &&
+      isMinorVersion !== null &&
+      (
+        isMinorVersion === 'true' || 
+        isMinorVersion === true || 
+        String(isMinorVersion).toLowerCase() === 'true'
+      )
+    );
+    const finalizeFlag = (
+      finalize !== undefined &&
+      finalize !== null &&
+      (
+        finalize === 'true' || 
+        finalize === true || 
+        String(finalize).toLowerCase() === 'true'
+      )
+    );
+
+    // DEBUG: Log normalized flags
+    console.log('🔍 [VERSION DEBUG] Normalized flags:');
+    console.log('  - isMinorVersionFlag:', isMinorVersionFlag, '(boolean)');
+    console.log('  - finalizeFlag:', finalizeFlag, '(boolean)');
 
     // Handle expiration validation only if expiration is provided
     if (expiration === 'true' && expdate) {
@@ -784,23 +912,74 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     // Create new document
     const newdoc = await db.Documents.create(updateData);
 
-    // Handle versioning
-    let versionNumber = `v1`;
-    const prevVersion = await db.DocumentVersions.findOne({
-      where: { DocumentID: record.ID, IsCurrentVersion: true }
+    // Handle versioning with minor/major version support
+    let versionNumber = `v1`; // Default for first version
+    // Find current version by LinkID (more reliable than DocumentID)
+    // Note: LinkID might be stored as string or number, so try both
+    const linkidStr = String(linkid);
+    const linkidNum = parseInt(linkid);
+    
+    console.log('🔍 [VERSION DEBUG] LinkID types:', {
+      original: linkid,
+      type: typeof linkid,
+      asString: linkidStr,
+      asNumber: linkidNum
     });
+    
+    // Try to find version by LinkID (try both string and number)
+    let prevVersion = await db.DocumentVersions.findOne({
+      where: { LinkID: linkidStr, IsCurrentVersion: true },
+      order: [['ModificationDate', 'DESC']]
+    });
+    
+    // If not found, try with number
+    if (!prevVersion && !isNaN(linkidNum)) {
+      prevVersion = await db.DocumentVersions.findOne({
+        where: { LinkID: linkidNum, IsCurrentVersion: true },
+        order: [['ModificationDate', 'DESC']]
+      });
+    }
+    
+    // DEBUG: Log previous version info
+    console.log('🔍 [VERSION DEBUG] Previous version lookup:');
+    console.log('  - LinkID:', linkid);
+    console.log('  - Previous version found:', prevVersion ? 'YES' : 'NO');
+    if (prevVersion) {
+      console.log('  - Previous version number:', prevVersion.VersionNumber);
+    }
     
     if (prevVersion) {
       // Mark previous version as not current
       await prevVersion.update({ IsCurrentVersion: false, Active: false });
-      // Extract version number from previous version
-      const versionMatch = prevVersion.VersionNumber.match(/v(\d+)/);
-      if (versionMatch) {
-        versionNumber = `v${parseInt(versionMatch[1]) + 1}`;
+      
+      // DEBUG: Log before version calculation
+      console.log('🔍 [VERSION DEBUG] Calculating new version:');
+      console.log('  - Current version:', prevVersion.VersionNumber);
+      console.log('  - isMinorVersionFlag:', isMinorVersionFlag);
+      console.log('  - finalizeFlag:', finalizeFlag);
+      
+      // Calculate new version using helper function
+      versionNumber = incrementVersion(
+        prevVersion.VersionNumber,
+        isMinorVersionFlag,
+        finalizeFlag
+      );
+      
+      // DEBUG: Log after version calculation
+      console.log('🔍 [VERSION DEBUG] Calculated new version:', versionNumber);
+    } else {
+      // No previous version found, but flags might be set
+      // If finalize is true on first version, create v2
+      if (finalizeFlag) {
+        versionNumber = `v2`;
+        console.log('🔍 [VERSION DEBUG] No previous version, but finalize=true, creating v2');
+      } else {
+        console.log('🔍 [VERSION DEBUG] No previous version, creating v1 (first version)');
       }
     }
 
-    console.log('Version Number:', versionNumber);
+    console.log('✅ [VERSION RESULT] Final version:', versionNumber, '| isMinorVersion:', isMinorVersionFlag, '| finalize:', finalizeFlag);
+    console.log('✅ [VERSION RESULT] ============================================');
 
     // Build changes object with only the fields that were actually provided
     const changes = {};
@@ -834,7 +1013,13 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     if (FileDescription !== undefined) changes.FileDescription = FileDescription;
     if (Description !== undefined) changes.Description = Description;
 
-    await db.DocumentVersions.create({
+    // DEBUG: Log before creating version record
+    console.log('🔍 [VERSION DEBUG] Creating version record:');
+    console.log('  - LinkID:', record.LinkID);
+    console.log('  - DocumentID:', newdoc.ID);
+    console.log('  - VersionNumber:', versionNumber);
+    
+    const versionRecord = await db.DocumentVersions.create({
       LinkID: record.LinkID,
       DocumentID: newdoc.ID,
       VersionNumber: versionNumber,
@@ -846,6 +1031,12 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       Active: true,
       FileDescription: getValue(FileDescription, record.FileDescription),
       Description: getValue(Description, record.Description)
+    });
+    
+    console.log('✅ [VERSION DEBUG] Version record created:', {
+      ID: versionRecord.ID,
+      VersionNumber: versionRecord.VersionNumber,
+      IsCurrentVersion: versionRecord.IsCurrentVersion
     });
 
     const smalldocwithoutfilebuffer = JSON.parse(JSON.stringify(newdoc));
