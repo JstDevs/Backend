@@ -16,7 +16,7 @@ async function convertPdfToImages(inputPdfPath, outputFolder) {
   //console.log("inputPdfPath",inputPdfPath)
 
   const options = {
-    pngFile: true,              // Equivalent to -png
+    pngFile: true,             // Equivalent to -png
     firstPageToConvert: 1,     // Equivalent to -f
     lastPageToConvert: 1,      // Equivalent to -l
     singleFile: false 
@@ -48,6 +48,7 @@ async function convertPdfBufferToImages(pdfBuffer, outputFolder) {
   // //console.log("file",filename,"path",outputFolder+`/${filename}`)
   const buffer= fs.readFileSync(outputFolder+`/${filename}`);
   // fs.unlinkSync(tempPath); // optional cleanup
+  console.log("we's converting them files to imageries and is a ", filename, " - bing bang boom!")
   console.log("filename",filename,"buffer",buffer)
   return {
     file:filename,
@@ -55,6 +56,31 @@ async function convertPdfBufferToImages(pdfBuffer, outputFolder) {
   }; // Return the buffer of the converted image
   
 }
+
+async function convertPdfBufferToMainFile(pdfBuffer, outputFolder) {
+  // Make sure the output folder exists
+  fs.mkdirSync(outputFolder, { recursive: true });
+
+  // Create a unique file name
+  const uuid = uuidv4();
+  const filename = `${uuid}.pdf`;
+  const filePath = path.join(outputFolder, filename);
+
+  // Write the original PDF buffer to disk
+  fs.writeFileSync(filePath, pdfBuffer);
+
+  // Read it back into a buffer (optional, if you need to send it somewhere)
+  const buffer = fs.readFileSync(filePath);
+
+  console.log("PDF saved without conversion:", filename);
+
+  // Return both filename and buffer
+  return {
+    file: filename,
+    buffer: buffer,
+  };
+}
+
 
 // async function convertPdfBufferToImages(pdfBuffer, outputFolder) {
 //   fs.mkdirSync(outputFolder, { recursive: true });
