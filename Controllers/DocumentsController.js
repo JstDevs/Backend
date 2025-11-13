@@ -1899,7 +1899,8 @@ router.get('/alldocuments/:userid', async (req, res) => {
   }
 });
 
-router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
+// ⚡ FIX: Shared analytics handler function
+const getDocumentAnalyticsHandler = async (req, res) => {
    try {
      const { documentId } = req.params;
      
@@ -1949,7 +1950,7 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        });
      }
      
-     // ⚡ OPTIMIZATION: Fetch document with DataImage and all related data in parallel
+     // ⚡ OPTIMIZATION: Fetch document WITHOUT DataImage first (much faster), then fetch DataImage only if needed
      // ⚡ FIX: Wrap each query in try-catch to handle individual failures
      const [
        document,
@@ -1964,9 +1965,10 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        templates,
        approvalsforthisdoc
      ] = await Promise.all([
-       // Main document with DataImage
+       // Main document WITHOUT DataImage (exclude heavy BLOB for faster query)
        db.Documents.findOne({
-         where: { LinkID: LinkID, Active: true }
+         where: { LinkID: LinkID, Active: true },
+         attributes: { exclude: ['DataImage'] } // ⚡ OPTIMIZATION: Exclude large BLOB
        }).catch(err => {
          console.error('Error fetching document:', err);
          return null;
@@ -2086,10 +2088,16 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
          where: { ID: userId },
          attributes: ['ID', 'userAccessArray']
        }).catch(() => null),
-       // Approvers
-       db.DocumentApprovers.findAll({ raw: true }).catch(() => []),
-       // Templates
-       db.Template.findAll({ raw: true }).catch(() => []),
+       // Approvers - limit to essential fields only
+       db.DocumentApprovers.findAll({ 
+         raw: true,
+         attributes: ['ID', 'ApproverID', 'DepartmentId', 'SubDepartmentId', 'Level', 'IsMajority']
+       }).catch(() => []),
+       // Templates - limit to essential fields only
+       db.Template.findAll({ 
+         raw: true,
+         attributes: ['ID', 'fields', 'departmentId', 'subDepartmentId']
+       }).catch(() => []),
        // Approvals - try string first, fallback to number
        (async () => {
          try {
@@ -2165,26 +2173,76 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        ? approvalsforthisdoc 
        : [];
      
-     // ⚡ OPTIMIZATION: Process document image asynchronously if available
-     let processedDocs = [];
-     if (!document.DataImage || document.DataImage.length === 0) {
-       // No image, return metadata only
-       const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
-       processedDocs = [{ ...docJson, filepath: null }];
-     } else {
-       // Process image (this is the heavy operation)
-       try {
-         processedDocs = await Promise.all(
-           [document].map(async doc =>
-             await processDocument(doc, restrictions || [], OCRDocumentReadFields || [], templates || [], true)
-           )
-         );
-       } catch (procErr) {
-         console.warn('processDocument failed, returning metadata only:', procErr?.message);
-         const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
-         processedDocs = [{ ...docJson, filepath: null, error: 'processing_failed' }];
+     // ⚡ OPTIMIZATION: Return metadata immediately, check cache first (FASTEST)
+     const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+     const temppath = path.join(__dirname, `../public/images/nonredacteddocs/document_${document.ID}`);
+     const redactedpath = path.join(__dirname, `../public/images/redacteddocs/document_${document.ID}`);
+     const pathrelativetoserver = `document_${document.ID}`;
+     
+     let fileUrl = null;
+     let isRestricted = Array.isArray(restrictions) && restrictions.some(r => r.DocumentID === document.ID);
+     
+     // ⚡ OPTIMIZATION: Check for cached images FIRST (instant response)
+     if (fs.existsSync(temppath)) {
+       const files = fs.readdirSync(temppath);
+       if (files.length > 0) {
+         const latestFile = files.sort().reverse()[0];
+         // Check for redacted version if restricted
+         if (isRestricted && fs.existsSync(redactedpath)) {
+           const redactedFiles = fs.readdirSync(redactedpath);
+           if (redactedFiles.length > 0) {
+             const redactedFile = redactedFiles.sort().reverse()[0];
+             fileUrl = `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${redactedFile}`;
+           } else {
+             fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+           }
+         } else {
+           fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+         }
        }
      }
+     
+     // ⚡ OPTIMIZATION: If no cache, fetch DataImage and process in background (don't wait for response)
+     if (!fileUrl) {
+       // Fetch DataImage separately (only if needed)
+       db.Documents.findOne({
+         where: { LinkID: LinkID, Active: true },
+         attributes: ['ID', 'DataImage', 'DataType', 'LinkID']
+       })
+         .then(docWithImage => {
+           if (docWithImage && docWithImage.DataImage && docWithImage.DataImage.length > 0) {
+             // Merge DataImage into document object
+             document.DataImage = docWithImage.DataImage;
+             document.DataType = docWithImage.DataType;
+             
+             // Start processing in background (non-blocking)
+             return processDocument(document, restrictions || [], OCRDocumentReadFields || [], templates || [], false);
+           }
+           return null;
+         })
+         .then(result => {
+           if (result) {
+             console.log('Background image processing completed for document:', document.ID);
+           }
+         })
+         .catch(err => {
+           console.warn('Background image processing failed:', err.message);
+         });
+       
+       // Return immediately with null filepath (frontend can poll or show loading)
+       fileUrl = null;
+     }
+     
+     // Remove DataImage from response (too large)
+     delete docJson.DataImage;
+     
+     const processedDocs = [{
+       ...docJson,
+       filepath: fileUrl,
+       isRestricted: isRestricted,
+       template_id: OCRDocumentReadFields?.find(f => f.LinkId === LinkID)?.template_id || null,
+       restrictions: isRestricted ? (restrictions || []).filter(r => r.DocumentID === document.ID) : []
+     }];
      
      const docwith = {
        document: processedDocs,
@@ -2211,10 +2269,11 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
      });
    }
- });
+};
 
-
-
+// ⚡ FIX: Support both routes for frontend compatibility
+router.get('/:documentId/analytics', requireAuth, getDocumentAnalyticsHandler);
+router.get('/documents/:documentId/analytics', requireAuth, getDocumentAnalyticsHandler);
 
 // ==================== COLLABORATION CRUD OPERATIONS ====================
 
