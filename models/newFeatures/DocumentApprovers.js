@@ -11,9 +11,19 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BIGINT,
       allowNull: false
     },
-    SubDepartmentId: {
+     SubDepartmentId: {
       type: DataTypes.BIGINT,
       allowNull: false
+    },
+    SequenceLevel: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
+    },
+    Active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: true
     },
     ApproverID: {
       type: DataTypes.STRING,

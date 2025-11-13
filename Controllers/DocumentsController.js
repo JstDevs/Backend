@@ -2380,7 +2380,111 @@ router.delete('/documents/:documentId/comments/:commentId', async (req, res) => 
 
 // ==================== APPROVAL CRUD OPERATIONS ====================
 
-// CREATE - Request approval
+const approvalHelper = require('../utils/approvalHelper');
+
+// CREATE - Request approval (NEW - Auto-create based on Approval Matrix)
+const createApprovalRequestHandler = async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const requestedBy = req.user.id || req.user.userName;
+
+    const document = await db.Documents.findByPk(documentId);
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // Check if approval already requested
+    const existingTracking = await db.DocumentApprovalTracking.findOne({
+      where: { DocumentID: documentId, LinkID: document.LinkID }
+    });
+
+    if (existingTracking) {
+      // Reset tracking to restart approval flow
+      await existingTracking.update({
+        CurrentLevel: 1,
+        LevelsCompleted: 0,
+        FinalStatus: 'PENDING',
+        UpdatedDate: new Date()
+      });
+
+      // Archive / cancel previous approval requests
+      await db.DocumentApprovals.update({
+        Status: 'ARCHIVED',
+        IsCancelled: true
+      }, {
+        where: {
+          DocumentID: documentId,
+          LinkID: document.LinkID
+        }
+      });
+    }
+
+    // Get Approval Matrix
+    const matrix = await approvalHelper.getApprovalMatrix(document.DepartmentId, document.SubDepartmentId);
+    if (!matrix) {
+      return res.status(400).json({
+        success: false,
+        message: 'No Approval Matrix configured for this Department/SubDepartment'
+      });
+    }
+
+    // Calculate total levels
+    const totalLevels = await approvalHelper.calculateTotalLevels(document.DepartmentId, document.SubDepartmentId);
+    if (totalLevels === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No approvers configured for this Department/SubDepartment'
+      });
+    }
+
+    // Create tracking record
+    const tracking = await approvalHelper.getOrCreateTracking(
+      documentId,
+      document.LinkID,
+      document.DepartmentId,
+      document.SubDepartmentId,
+      totalLevels,
+      matrix.AllorMajority
+    );
+
+    // Create approval requests for Level 1
+    const requests = await approvalHelper.createApprovalRequestsForLevel(
+      documentId,
+      document.LinkID,
+      1,
+      requestedBy
+    );
+
+    await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, { tracking, requests }, req, document.LinkID);
+
+    res.status(201).json({
+      success: true,
+      message: 'Approval requests created successfully',
+      data: {
+        tracking: tracking,
+        requests: requests,
+        currentLevel: 1,
+        totalLevels: totalLevels
+      }
+    });
+
+  } catch (error) {
+    console.error('Error requesting approval:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error requesting approval',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+router.post('/documents/:documentId/approvals/request', requireAuth, createApprovalRequestHandler);
+router.post('/:documentId/approvals/request', requireAuth, createApprovalRequestHandler);
+
+// CREATE - Request approval (OLD - Manual, kept for backward compatibility)
 router.post('/documents/:documentId/approvals', async (req, res) => {
   try {
     const { documentId } = req.params;
@@ -2480,34 +2584,123 @@ router.get('/documents/:documentId/approval/:id', async (req, res) => {
   }
 });
 
-// UPDATE - Approve/Reject
-router.put('/documents/:documentId/approvals/:approvalId', requireAuth,async (req, res) => {
+// UPDATE - Approve/Reject (NEW - With level progression logic)
+const updateApprovalHandler = async (req, res) => {
   try {
     const { documentId, approvalId } = req.params;
-    const { status, comments, rejectionReason, approverId } = req.body;
+    const { status, comments, rejectionReason } = req.body;
+    const approverId = req.user.id || req.user.userName;
+    const approverName = req.user.userName || req.user.id;
 
     const oldApproval = await db.DocumentApprovals.findByPk(approvalId);
-const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    if (!oldApproval) {
+      return res.status(404).json({
+        success: false,
+        message: 'Approval request not found'
+      });
+    }
+
+    const document = await db.Documents.findByPk(documentId);
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // Check if already processed
+    if (oldApproval.Status !== 'PENDING' && !oldApproval.IsCancelled) {
+      return res.status(400).json({
+        success: false,
+        message: 'This approval request has already been processed'
+      });
+    }
+
+    // Normalize status to uppercase
+    const normalizedStatus = status ? status.toUpperCase() : 'PENDING';
+    if (normalizedStatus !== 'APPROVED' && normalizedStatus !== 'REJECTED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Status must be either "APPROVED" or "REJECTED"'
+      });
+    }
+
+    // Update approval status
     await db.DocumentApprovals.update({
-      Status: status,
+      Status: normalizedStatus,
       ApprovalDate: new Date(),
-      ApproverID:req.user.id,
-      ApproverName:req.user.userName,
+      ApproverID: approverId,
+      ApproverName: approverName,
       Comments: comments,
-      RejectionReason: rejectionReason
+      RejectionReason: rejectionReason,
+      IsCancelled: false
     }, {
       where: { ID: approvalId }
     });
 
     const updatedApproval = await db.DocumentApprovals.findByPk(approvalId);
+    const currentLevel = updatedApproval.SequenceLevel;
 
-    const action = status === 'APPROVED' ? 'APPROVED' : 'REJECTED';
-    await logAuditTrail(documentId, action, approverId, oldApproval?.toJSON(), updatedApproval?.toJSON(), req,linkid);
+    // Cancel remaining requests in same level
+    await approvalHelper.cancelRemainingRequests(documentId, document.LinkID, currentLevel, approvalId);
+
+    // Get tracking
+    const tracking = await db.DocumentApprovalTracking.findOne({
+      where: { DocumentID: documentId, LinkID: document.LinkID }
+    });
+
+    if (tracking) {
+      // Check if all levels completed BEFORE incrementing
+      const newLevelsCompleted = tracking.LevelsCompleted + 1;
+      const allCompleted = newLevelsCompleted >= tracking.TotalLevels;
+
+      // Update tracking
+      await approvalHelper.updateTracking(documentId, {
+        LevelsCompleted: newLevelsCompleted
+      });
+
+      if (allCompleted) {
+        // Calculate final status
+        const finalStatus = await approvalHelper.calculateFinalStatus(documentId, document.LinkID);
+        
+        await logAuditTrail(documentId, `APPROVAL_${finalStatus}`, approverId, oldApproval?.toJSON(), { finalStatus }, req, document.LinkID);
+
+        return res.status(200).json({
+          success: true,
+          message: `All approval levels completed. Document ${finalStatus.toLowerCase()}.`,
+          data: {
+            approval: updatedApproval,
+            finalStatus: finalStatus,
+            allLevelsCompleted: true
+          }
+        });
+      } else {
+        // Move to next level
+        const nextLevelResult = await approvalHelper.moveToNextLevel(documentId, document.LinkID, currentLevel, approverId);
+
+        if (nextLevelResult.hasNextLevel) {
+          await logAuditTrail(documentId, `APPROVAL_LEVEL_${currentLevel}_${normalizedStatus}`, approverId, oldApproval?.toJSON(), { level: currentLevel, status: normalizedStatus, nextLevel: nextLevelResult.level }, req, document.LinkID);
+
+          return res.status(200).json({
+            success: true,
+            message: `Level ${currentLevel} ${normalizedStatus.toLowerCase()}. Moved to Level ${nextLevelResult.level}.`,
+            data: {
+              approval: updatedApproval,
+              currentLevel: nextLevelResult.level,
+              allLevelsCompleted: false
+            }
+          });
+        }
+      }
+    }
+
+    // Log action
+    const action = normalizedStatus === 'APPROVED' ? 'APPROVED' : 'REJECTED';
+    await logAuditTrail(documentId, action, approverId, oldApproval?.toJSON(), updatedApproval?.toJSON(), req, document.LinkID);
 
     res.status(200).json({
       success: true,
-      message: `Document ${status.toLowerCase()} successfully`,
+      message: `Approval ${normalizedStatus.toLowerCase()} successfully`,
       data: updatedApproval
     });
 
@@ -2519,7 +2712,51 @@ const documentbypk=await db.Documents.findByPk(documentId)
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
-});
+};
+
+router.put('/documents/:documentId/approvals/:approvalId', requireAuth, updateApprovalHandler);
+router.put('/:documentId/approvals/:approvalId', requireAuth, updateApprovalHandler);
+
+// GET - Approval status with level details
+const getApprovalStatusHandler = async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const document = await db.Documents.findByPk(documentId);
+    
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    const status = await approvalHelper.getApprovalStatus(documentId, document.LinkID);
+
+    if (!status) {
+      return res.status(200).json({
+        success: false,
+        message: 'No approval tracking found for this document',
+        data: null
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: status
+    });
+
+  } catch (error) {
+    console.error('Error fetching approval status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching approval status',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+router.get('/documents/:documentId/approvals/status', requireAuth, getApprovalStatusHandler);
+router.get('/:documentId/approvals/status', requireAuth, getApprovalStatusHandler);
 // ==================== RESTRICTIONS CRUD OPERATIONS ====================
 
 // CREATE - Add restriction old, field based only
@@ -2904,9 +3141,69 @@ router.delete('/documenttypes/:id', async (req, res) => {
 // 👉 GET all approvers
 router.get('/document-approvers', async (req, res) => {
   try {
-    const approvers = await DocumentApprovers.findAll();
+    const departmentId = req.query.departmentId || req.query.DepartmentId;
+    const subDepartmentId = req.query.subDepartmentId || req.query.SubDepartmentId;
+    const level = req.query.level || req.query.Level;
+    const active = req.query.active || req.query.Active;
+
+    const where = {};
+    
+    if (departmentId) where.DepartmentId = departmentId;
+    if (subDepartmentId) where.SubDepartmentId = subDepartmentId;
+    if (level) where.SequenceLevel = level;
+    if (active !== undefined) where.Active = active === 'true' || active === true || active === '1' || active === 1;
+
+    const approvers = await DocumentApprovers.findAll({
+      where: Object.keys(where).length > 0 ? where : {},
+      order: [['DepartmentId', 'ASC'], ['SubDepartmentId', 'ASC'], ['SequenceLevel', 'ASC']]
+    });
+    
     return res.status(200).json({
-      status:true,
+      status: true,
+      approvers
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 👉 GET approvers by Department and SubDepartment
+router.get('/document-approvers/by-dept-subdept/:deptId/:subDeptId', async (req, res) => {
+  try {
+    const { deptId, subDeptId } = req.params;
+    const approvers = await DocumentApprovers.findAll({
+      where: {
+        DepartmentId: deptId,
+        SubDepartmentId: subDeptId,
+        Active: true
+      },
+      order: [['SequenceLevel', 'ASC']]
+    });
+    
+    return res.status(200).json({
+      status: true,
+      approvers
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 👉 GET approvers by level
+router.get('/document-approvers/by-level/:deptId/:subDeptId/:level', async (req, res) => {
+  try {
+    const { deptId, subDeptId, level } = req.params;
+    const approvers = await DocumentApprovers.findAll({
+      where: {
+        DepartmentId: deptId,
+        SubDepartmentId: subDeptId,
+        SequenceLevel: level,
+        Active: true
+      }
+    });
+    
+    return res.status(200).json({
+      status: true,
       approvers
     });
   } catch (err) {
@@ -2932,13 +3229,18 @@ router.get('/document-approvers/:id', async (req, res) => {
 // 👉 CREATE new approver
 router.post('/document-approvers', async (req, res) => {
   try {
-    const { DepartmentId, SubDepartmentId, ApproverID } = req.body;
-    const newApprover = await DocumentApprovers.create({ DepartmentId, SubDepartmentId, ApproverID });
-      return res.status(200).json({
-      status:true,
-      approver:newApprover
+    const { DepartmentId, SubDepartmentId, ApproverID, SequenceLevel, Active } = req.body;
+    const newApprover = await DocumentApprovers.create({ 
+      DepartmentId, 
+      SubDepartmentId, 
+      ApproverID,
+      SequenceLevel: SequenceLevel || 1,
+      Active: Active !== undefined ? Active : true
     });
-    res.status(201).json(newApprover);
+    return res.status(200).json({
+      status: true,
+      approver: newApprover
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -2947,16 +3249,22 @@ router.post('/document-approvers', async (req, res) => {
 // 👉 UPDATE existing approver
 router.put('/document-approvers/:id', async (req, res) => {
   try {
-    const { DepartmentId, SubDepartmentId, ApproverID } = req.body;
+    const { DepartmentId, SubDepartmentId, ApproverID, SequenceLevel, Active } = req.body;
     const approver = await DocumentApprovers.findByPk(req.params.id);
     if (!approver) return res.status(404).json({ message: 'Approver not found' });
 
-    await approver.update({ DepartmentId, SubDepartmentId, ApproverID });
-      return res.status(200).json({
-      status:true,
-      approver:approver
+    const updateData = {};
+    if (DepartmentId !== undefined) updateData.DepartmentId = DepartmentId;
+    if (SubDepartmentId !== undefined) updateData.SubDepartmentId = SubDepartmentId;
+    if (ApproverID !== undefined) updateData.ApproverID = ApproverID;
+    if (SequenceLevel !== undefined) updateData.SequenceLevel = SequenceLevel;
+    if (Active !== undefined) updateData.Active = Active;
+
+    await approver.update(updateData);
+    return res.status(200).json({
+      status: true,
+      approver: approver
     });
-    // res.status(200).json(approver);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

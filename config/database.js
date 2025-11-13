@@ -99,6 +99,7 @@ let models = [
   require("../models/Useruseraccess"),
   require("../models/newFeatures/DocumentApprovers"),
   require("../models/newFeatures/approvalmatrix"),
+  require("../models/newFeatures/DocumentApprovalTracking"),
   require("../models/newFeatures/AuditActivities")
   // require('./yourModelFile') — add models here
 ];

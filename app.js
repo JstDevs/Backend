@@ -24,6 +24,7 @@ const unrecorded = require('./Controllers/UnrecordedController.js'); // Assuming
 const AllocationController = require('./Controllers/AllocationController.js'); // Assuming you have an AllocationController for allocation of documents
 const BatchUpload= require('./Controllers/BatchUpload.js'); // Assuming you have a BatchUploadController for batch uploads
 const ApprovalMatrix= require('./Controllers/ApprovalMatrix.js');
+const DocumentApproverController = require('./Controllers/DocumentApproverController.js');
 const AuditController = require('./Controllers/AuditController.js');
 const FieldsController = require('./Controllers/FieldsController.js');
 var app = express();
@@ -105,6 +106,7 @@ app.use('/ocr', unrecorded); // Add your OCR processing routes
 app.use('/allocation', AllocationController); // Add your allocation routes
 app.use('/batchUpload', BatchUpload); // Add your batch upload routes
 app.use('/approvalMatrix', ApprovalMatrix); // Add your batch upload routes
+app.use('/document-approvers', DocumentApproverController);
 app.use('/audit', AuditController); // Add your audit routes
 app.use('/fields', FieldsController); // Add your fields routes
 

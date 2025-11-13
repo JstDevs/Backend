@@ -43,6 +43,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false
     },
+    SequenceLevel: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
+    },
+    IsCancelled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: false
+    },
     // ApprovalLevel: {
     //   type: DataTypes.INTEGER,
     //   allowNull: false,
