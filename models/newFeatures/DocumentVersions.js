@@ -51,12 +51,19 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     tableName: 'DocumentVersions',
     timestamps: false,
-    // indexes: [
-    //   {
-    //     fields: ['DocumentID', 'VersionNumber','LinkID'],
-    //     unique: true
-    //   }
-    // ]
+    indexes: [
+      {
+        fields: ['LinkID', 'IsCurrentVersion'], // ⚡ OPTIMIZATION: Index for fast current version lookups
+        name: 'idx_versions_linkid_current'
+      },
+      {
+        fields: ['LinkID', 'ModificationDate'], // ⚡ OPTIMIZATION: Index for fast version lookups
+        name: 'idx_versions_linkid_moddate'
+      },
+      {
+        fields: ['DocumentID']
+      }
+    ]
   });
 
   return DocumentVersionsModel;

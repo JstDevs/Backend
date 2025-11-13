@@ -309,14 +309,31 @@ async function checkAllLevelsCompleted(documentId) {
  */
 async function getAllLevelDecisions(documentId, linkId) {
   try {
-    const approvals = await db.DocumentApprovals.findAll({
-      where: {
-        DocumentID: documentId,
-        LinkID: linkId,
-        IsCancelled: false
-      },
-      order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']]
-    });
+    // ⚡ FIX: Handle LinkID type (string or number)
+    const linkIdStr = String(linkId);
+    const linkIdNum = parseInt(linkId) || linkIdStr;
+    
+    // ⚡ FIX: Try string first, fallback to number
+    let approvals;
+    try {
+      approvals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdStr,
+          IsCancelled: false
+        },
+        order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']]
+      });
+    } catch {
+      approvals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdNum,
+          IsCancelled: false
+        },
+        order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']]
+      });
+    }
 
     // Group by level and get the decision (first non-cancelled, non-pending decision per level)
     const levelDecisions = {};
@@ -388,22 +405,47 @@ async function calculateFinalStatus(documentId, linkId) {
  */
 async function getApprovalStatus(documentId, linkId) {
   try {
-    const tracking = await db.DocumentApprovalTracking.findOne({
-      where: { DocumentID: documentId, LinkID: linkId }
-    });
+    // ⚡ FIX: Handle LinkID type (string or number)
+    const linkIdStr = String(linkId);
+    const linkIdNum = parseInt(linkId) || linkIdStr;
+    
+    // ⚡ FIX: Try string first, fallback to number
+    let tracking;
+    try {
+      tracking = await db.DocumentApprovalTracking.findOne({
+        where: { DocumentID: documentId, LinkID: linkIdStr }
+      });
+    } catch {
+      tracking = await db.DocumentApprovalTracking.findOne({
+        where: { DocumentID: documentId, LinkID: linkIdNum }
+      });
+    }
 
     if (!tracking) {
       return null;
     }
 
-    const levelDecisions = await getAllLevelDecisions(documentId, linkId);
-    const allApprovals = await db.DocumentApprovals.findAll({
-      where: {
-        DocumentID: documentId,
-        LinkID: linkId
-      },
-      order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
-    });
+    const levelDecisions = await getAllLevelDecisions(documentId, linkIdStr);
+    
+    // ⚡ FIX: Try string first, fallback to number for approvals
+    let allApprovals;
+    try {
+      allApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdStr
+        },
+        order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
+      });
+    } catch {
+      allApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdNum
+        },
+        order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
+      });
+    }
 
     // Get approvers for each level
     const levelDetails = {};

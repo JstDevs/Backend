@@ -98,7 +98,16 @@ module.exports = (sequelize, DataTypes) => {
     // }
   }, {
     tableName: 'DocumentApprovals',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+      {
+        fields: ['LinkID', 'RequestedBy'], // ⚡ OPTIMIZATION: Index for fast approval lookups
+        name: 'idx_approvals_linkid_requestedby'
+      },
+      {
+        fields: ['DocumentID']
+      }
+    ]
   });
 
   return DocumentApprovalsModel;

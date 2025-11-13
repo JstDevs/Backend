@@ -1468,90 +1468,136 @@ router.get('/documents/:userid', async (req, res) => {
         { Remarks: { [Op.like]: `%${search}%` } }
       ];
     }
-    const restrictions=await db.DocumentRestrictions.findAll({
-      where:{
-        UserID:userid
-      },
-      raw:true
-    })
-    const user=await db.Users.findOne({
-      where:{ID:userid},
-       
-    })
-    let userAccess=[]
-    try{
-      userAccess=JSON.parse(user.userAccessArray)
-    }catch(e){}
-    const approvers=await db.DocumentApprovers.findAll({})
+    
+    // ⚡ OPTIMIZATION: Parallelize independent queries
+    const [restrictions, user, approvers, documents] = await Promise.all([
+      db.DocumentRestrictions.findAll({
+        where: { UserID: userid },
+        raw: true
+      }),
+      db.Users.findOne({
+        where: { ID: userid },
+        attributes: ['ID', 'userAccessArray'] // Only fetch needed fields
+      }),
+      db.DocumentApprovers.findAll({ raw: true }),
+      db.Documents.findAndCountAll({
+        where: whereClause,
+        attributes: {
+          exclude: ['DataImage'] // Skip BLOB data
+        },
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        order: [['CreatedDate', 'DESC']]
+      })
+    ]);
+    
+    let userAccess = [];
+    try {
+      userAccess = user?.userAccessArray ? JSON.parse(user.userAccessArray) : [];
+    } catch(e) {}
+    
     const restrictionIds = restrictions.map(r => r.DocumentID);
-    // console.log("restrictions",restrictions)
     
-    // ⚡ OPTIMIZATION: Don't fetch DataImage BLOB in list view
-    const documents = await db.Documents.findAndCountAll({
-      where: whereClause,
-      attributes: {
-        exclude: ['DataImage'] // Skip BLOB data
-      },
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      order: [['CreatedDate', 'DESC']]
-    });
+    // ⚡ OPTIMIZATION: Simplified and faster - use IsCurrentVersion flag if available
+    const linkIds = documents.rows.map(doc => String(doc.LinkID));
     
-    // ⚡ OPTIMIZATION: Batch fetch all versions in ONE query
-    const linkIds = documents.rows.map(doc => doc.LinkID);
-    const allVersions = await db.DocumentVersions.findAll({
-      where: { LinkID: { [Op.in]: linkIds } },
-      order: [['ModificationDate', 'DESC']],
-      raw: true
-    });
+    // ⚡ OPTIMIZATION: Fetch only current versions first (fastest), fallback to latest if needed
+    const [currentVersions, allApprovals] = await Promise.all([
+      linkIds.length > 0 ? db.DocumentVersions.findAll({
+        where: { 
+          LinkID: { [Op.in]: linkIds },
+          IsCurrentVersion: true
+        },
+        attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy', 'IsCurrentVersion'],
+        raw: true
+      }).catch(() => []) : [],
+      
+      linkIds.length > 0 ? db.DocumentApprovals.findAll({
+        where: { 
+          LinkID: { [Op.in]: linkIds },
+          RequestedBy: userid
+        },
+        attributes: ['ID', 'LinkID', 'Status', 'RequestedDate'],
+        order: [['RequestedDate', 'DESC']],
+        raw: true,
+        limit: 1000 // Limit to prevent huge queries
+      }).catch(() => []) : []
+    ]);
     
-    // Create version map for O(1) lookup
+    // ⚡ OPTIMIZATION: If some documents don't have IsCurrentVersion, fetch latest for those
+    const currentVersionLinkIds = new Set(currentVersions.map(v => String(v.LinkID)));
+    const missingLinkIds = linkIds.filter(id => !currentVersionLinkIds.has(id));
+    
+    // ⚡ OPTIMIZATION: Filter latest versions to only one per LinkID (in memory, fast)
+    let latestVersions = [];
+    if (missingLinkIds.length > 0) {
+      const allLatest = await db.DocumentVersions.findAll({
+        where: { LinkID: { [Op.in]: missingLinkIds } },
+        attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy', 'IsCurrentVersion'],
+        order: [['ModificationDate', 'DESC']],
+        raw: true
+      }).catch(() => []);
+      
+      // Filter to only latest per LinkID (fast in-memory operation)
+      const latestMap = {};
+      allLatest.forEach(v => {
+        const linkId = String(v.LinkID);
+        if (!latestMap[linkId]) {
+          latestMap[linkId] = v;
+        }
+      });
+      latestVersions = Object.values(latestMap);
+    }
+    
+    // Combine versions
+    const allVersions = [...currentVersions, ...latestVersions];
+    
+    // ⚡ OPTIMIZATION: Create version map (already filtered)
     const versionMap = {};
     allVersions.forEach(version => {
-      if (!versionMap[version.LinkID]) {
-        versionMap[version.LinkID] = version;
+      const linkId = String(version.LinkID);
+      versionMap[linkId] = version;
+    });
+    
+    // ⚡ OPTIMIZATION: Create approval map with latest approval per LinkID
+    const approvalMap = {};
+    allApprovals.forEach(approval => {
+      const linkId = String(approval.LinkID);
+      if (!approvalMap[linkId]) {
+        approvalMap[linkId] = approval;
       }
     });
     
-    // ⚡ OPTIMIZATION: Batch fetch all approvals in ONE query
-    const allApprovals = await db.DocumentApprovals.findAll({
-      where: { 
-        LinkID: { [Op.in]: linkIds },
-        RequestedBy: userid
-      },
-      raw: true
-    });
-    
-    const approvalMap = {};
-    allApprovals.forEach(approval => {
-      if (!approvalMap[approval.LinkID]) {
-        approvalMap[approval.LinkID] = approval;
+    // ⚡ OPTIMIZATION: Pre-create approver lookup map for O(1) access
+    const approverMap = {};
+    approvers.forEach(approver => {
+      const key = `${approver.DepartmentId}_${approver.SubDepartmentId}`;
+      if (!approverMap[key]) {
+        approverMap[key] = approver;
       }
     });
     
     const newdocuments = documents.rows.map(doc => {
-      const LinkID=doc.LinkID
-      const versions = versionMap[LinkID];
-      const doc_under_approvalof = approvers.find(e =>
-        e.DepartmentId === doc.DepartmentId && e.SubDepartmentId === doc.SubDepartmentId
-      );
+      const LinkID = String(doc.LinkID);
+      const versions = versionMap[LinkID] || null;
+      const approverKey = `${doc.DepartmentId}_${doc.SubDepartmentId}`;
+      const doc_under_approvalof = approverMap[approverKey];
       const approval = approvalMap[LinkID];
-      const shoulduserbeallowedtoapproverequest=doc_under_approvalof?true:false
-      const isRestricted = restrictionIds.includes(doc.ID+"");
-      const newdoc=JSON.parse(JSON.stringify(doc))
-      newdoc.approval=approval
-      newdoc.approvalstatus=false
-      if(approval && approval.Status=="1"){
-        newdoc.approvalstatus=true
+      const shoulduserbeallowedtoapproverequest = doc_under_approvalof ? true : false;
+      const isRestricted = restrictionIds.includes(doc.ID + "");
+      const newdoc = JSON.parse(JSON.stringify(doc));
+      newdoc.approval = approval;
+      newdoc.approvalstatus = false;
+      if(approval && approval.Status == "1") {
+        newdoc.approvalstatus = true;
       }
       return {
         newdoc,
         isRestricted: isRestricted,
-        versions:versions,
+        versions: versions,
         restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
       };
-
-    })
+    });
     
     res.status(200).json({
       success: true,
@@ -1574,8 +1620,6 @@ router.get('/documents/:userid', async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
-
-  // res.json({data:"hello"})
 });
 
 router.get('/alldocuments_old/:userid', async (req, res) => {
@@ -1718,42 +1762,75 @@ router.get('/alldocuments/:userid', async (req, res) => {
 
     const whereClause = buildWhereClause(search);
 
-    // Fetch user-specific restrictions
-    const restrictions = await db.DocumentRestrictions.findAll({
-      where: { UserID: userid },
-      raw: true
-    });
+    // ⚡ OPTIMIZATION: Parallelize initial queries
+    const [restrictions, documents, OCRDocumentReadFields, templates] = await Promise.all([
+      db.DocumentRestrictions.findAll({
+        where: { UserID: userid },
+        raw: true
+      }),
+      db.Documents.findAndCountAll({
+        where: whereClause,
+        attributes: {
+          exclude: ['DataImage'] // 🚀 Skip BLOB data for list view
+        },
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        order: [['CreatedDate', 'DESC']]
+      }),
+      db.OCRDocumentReadFields.findAll({ 
+        raw: true,
+        order: [['CreatedAt', 'DESC']]
+      }),
+      db.Template.findAll({ raw: true })
+    ]);
+    
     const restrictedIds = restrictions.map(r => r.DocumentID);
 
-    // ⚡ OPTIMIZATION: Don't fetch DataImage BLOB in list view - HUGE performance gain
-    const documents = await db.Documents.findAndCountAll({
-      where: whereClause,
-      attributes: {
-        exclude: ['DataImage'] // 🚀 Skip BLOB data for list view
-      },
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      order: [['CreatedDate', 'DESC']]
-    });
-
-    // Supporting data
-    const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({ raw: true,order: [['CreatedAt', 'DESC']]}) // or 'create });
-    const templates = await db.Template.findAll({ raw: true });
-
-    // ⚡ OPTIMIZATION: Batch fetch all versions in ONE query instead of N+1
-    const linkIds = documents.rows.map(doc => doc.LinkID);
-    const allVersions = await db.DocumentVersions.findAll({
-      where: { LinkID: { [Op.in]: linkIds } },
-      order: [['ModificationDate', 'DESC']],
-      raw: true
-    });
+    // ⚡ OPTIMIZATION: Simplified - use IsCurrentVersion flag for speed
+    const linkIds = documents.rows.map(doc => String(doc.LinkID));
     
-    // Create version map for O(1) lookup
+    // Fetch current versions first (fastest)
+    const currentVersions = linkIds.length > 0 ? await db.DocumentVersions.findAll({
+      where: { 
+        LinkID: { [Op.in]: linkIds },
+        IsCurrentVersion: true
+      },
+      attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy'],
+      raw: true
+    }).catch(() => []) : [];
+    
+    // Get missing LinkIDs
+    const currentVersionLinkIds = new Set(currentVersions.map(v => String(v.LinkID)));
+    const missingLinkIds = linkIds.filter(id => !currentVersionLinkIds.has(id));
+    
+    // Fetch latest for missing ones and filter to one per LinkID
+    let latestVersions = [];
+    if (missingLinkIds.length > 0) {
+      const allLatest = await db.DocumentVersions.findAll({
+        where: { LinkID: { [Op.in]: missingLinkIds } },
+        attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy'],
+        order: [['ModificationDate', 'DESC']],
+        raw: true
+      }).catch(() => []);
+      
+      // Filter to only latest per LinkID (fast in-memory)
+      const latestMap = {};
+      allLatest.forEach(v => {
+        const linkId = String(v.LinkID);
+        if (!latestMap[linkId]) {
+          latestMap[linkId] = v;
+        }
+      });
+      latestVersions = Object.values(latestMap);
+    }
+    
+    const allVersions = [...currentVersions, ...latestVersions];
+    
+    // ⚡ OPTIMIZATION: Create version map (already filtered)
     const versionMap = {};
     allVersions.forEach(version => {
-      if (!versionMap[version.LinkID]) {
-        versionMap[version.LinkID] = version;
-      }
+      const linkId = String(version.LinkID);
+      versionMap[linkId] = version;
     });
 
     // ⚡ OPTIMIZATION: Lightweight processing for list view - no image processing
@@ -1825,23 +1902,38 @@ router.get('/alldocuments/:userid', async (req, res) => {
 router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
    try {
      const { documentId } = req.params;
-     const  userId  = req.user.id;
-     const latestestdocument=await db.Documents.findByPk(documentId)
+     
+     // ⚡ FIX: Check if req.user exists
+     if (!req.user || !req.user.id) {
+       return res.status(401).json({ 
+         success: false, 
+         message: 'Authentication required' 
+       });
+     }
+     
+     const userId = req.user.id;
+     
+     // ⚡ OPTIMIZATION: Fetch initial document first for permission checks
+     const latestestdocument = await db.Documents.findByPk(documentId, {
+       attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId', 'Confidential', 'Active']
+     });
+     
      if (!latestestdocument) {
        return res.status(404).json({ success: false, message: 'Document not found' });
      }
-     const LinkID=latestestdocument.LinkID
+     
+     // ⚡ FIX: Ensure LinkID is converted to string for consistency (but keep original for fallback)
+     const LinkID = String(latestestdocument.LinkID);
+     const LinkIDNum = parseInt(latestestdocument.LinkID) || LinkID; // Fallback for numeric queries
      const departmentId = latestestdocument.DepartmentId;
      const subDepartmentId = latestestdocument.SubDepartmentId;
      const isConfidential = latestestdocument.Confidential === true || latestestdocument.Confidential === 1;
      
-     // Check if user has View permission
-     const hasViewPermission = await checkUserPermission(
-       userId, 
-       departmentId, 
-       subDepartmentId, 
-       'View'
-     );
+     // ⚡ OPTIMIZATION: Check permissions in parallel
+     const [hasViewPermission, hasConfidentialPermission] = await Promise.all([
+       checkUserPermission(userId, departmentId, subDepartmentId, 'View'),
+       isConfidential ? checkUserPermission(userId, departmentId, subDepartmentId, 'Confidential') : Promise.resolve(true)
+     ]);
      
      if (!hasViewPermission) {
        return res.status(403).json({
@@ -1850,34 +1942,174 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        });
      }
      
-     // If document is confidential, check Confidential permission
-     if (isConfidential) {
-       const hasConfidentialPermission = await checkUserPermission(
-         userId, 
-         departmentId, 
-         subDepartmentId, 
-         'Confidential'
-       );
-       
-       if (!hasConfidentialPermission) {
-         return res.status(403).json({
-           success: false,
-           message: 'You do not have permission to view confidential documents in this department and document type'
-         });
-       }
+     if (isConfidential && !hasConfidentialPermission) {
+       return res.status(403).json({
+         success: false,
+         message: 'You do not have permission to view confidential documents in this department and document type'
+       });
      }
-     // ⚡ IMPORTANT: Fetch document with DataImage for detail view
-     const document = await db.Documents.findOne({
-       where: { LinkID: LinkID, Active: true },
-       attributes: {
-         // Include DataImage for detail view so we can process it
-       }
-     });
      
-     console.log("Document fetched:", document ? "Yes" : "No");
-     console.log("DataImage size:", document?.DataImage?.length || 0, "bytes");
-    
-
+     // ⚡ OPTIMIZATION: Fetch document with DataImage and all related data in parallel
+     // ⚡ FIX: Wrap each query in try-catch to handle individual failures
+     const [
+       document,
+       versions,
+       OCRDocumentReadFields,
+       collaborations,
+       comments,
+       auditTrails,
+       restrictions,
+       user,
+       approvers,
+       templates,
+       approvalsforthisdoc
+     ] = await Promise.all([
+       // Main document with DataImage
+       db.Documents.findOne({
+         where: { LinkID: LinkID, Active: true }
+       }).catch(err => {
+         console.error('Error fetching document:', err);
+         return null;
+       }),
+       // Versions - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentVersions.findAll({
+             where: { LinkID: LinkID },
+             order: [['ModificationDate', 'DESC']]
+           });
+         } catch {
+           try {
+             return await db.DocumentVersions.findAll({
+               where: { LinkID: LinkIDNum },
+               order: [['ModificationDate', 'DESC']]
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // OCR Fields - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.OCRDocumentReadFields.findAll({
+             where: { LinkId: LinkID },
+             raw: true
+           });
+         } catch {
+           try {
+             return await db.OCRDocumentReadFields.findAll({
+               where: { LinkId: LinkIDNum },
+               raw: true
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // Collaborations - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentCollaborations.findAll({
+             where: { LinkID: LinkID }
+           });
+         } catch {
+           try {
+             return await db.DocumentCollaborations.findAll({
+               where: { LinkID: LinkIDNum }
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // Comments with pagination - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentComments.findAll({
+             where: { LinkID: LinkID },
+             order: [['CommentDate', 'DESC']],
+             limit: 50
+           });
+         } catch {
+           try {
+             return await db.DocumentComments.findAll({
+               where: { LinkID: LinkIDNum },
+               order: [['CommentDate', 'DESC']],
+               limit: 50
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // Audit trails with pagination - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentAuditTrail.findAll({
+             where: { LinkID: LinkID },
+             order: [['ActionDate', 'DESC']],
+             limit: 100
+           });
+         } catch {
+           try {
+             return await db.DocumentAuditTrail.findAll({
+               where: { LinkID: LinkIDNum },
+               order: [['ActionDate', 'DESC']],
+               limit: 100
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // Restrictions - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentRestrictions.findAll({
+             where: { LinkID: LinkID, UserID: userId },
+             order: [['CreatedDate', 'DESC']]
+           });
+         } catch {
+           try {
+             return await db.DocumentRestrictions.findAll({
+               where: { LinkID: LinkIDNum, UserID: userId },
+               order: [['CreatedDate', 'DESC']]
+             });
+           } catch {
+             return [];
+           }
+         }
+       })(),
+       // User data
+       db.Users.findOne({
+         where: { ID: userId },
+         attributes: ['ID', 'userAccessArray']
+       }).catch(() => null),
+       // Approvers
+       db.DocumentApprovers.findAll({ raw: true }).catch(() => []),
+       // Templates
+       db.Template.findAll({ raw: true }).catch(() => []),
+       // Approvals - try string first, fallback to number
+       (async () => {
+         try {
+           return await db.DocumentApprovals.findAll({
+             where: { LinkID: LinkID },
+             raw: true
+           });
+         } catch {
+           try {
+             return await db.DocumentApprovals.findAll({
+               where: { LinkID: LinkIDNum },
+               raw: true
+             });
+           } catch {
+             return [];
+           }
+         }
+       })()
+     ]);
+     
      if (!document) {
        return res.status(404).json({
          success: false,
@@ -1885,183 +2117,86 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
        });
      }
 
-    // If no file/image stored, skip heavy processing and just return metadata
-    if (!document.DataImage || document.DataImage.length === 0) {
-      const versions= await db.DocumentVersions.findAll({
-            where: { LinkID: LinkID },
-            order: [['ModificationDate', 'DESC']]
-          });
-      
-      // Fetch audit trails even for documents without DataImage
-      const auditTrails = await db.DocumentAuditTrail.findAll({
-        where: { LinkID: LinkID },
-        include: [
-          {
-            model: db.Users,
-            as: 'actor',
-            attributes: ['ID', 'UserName']
-          }
-        ],
-        order: [['ActionDate', 'DESC']]
-      });
-      
-      const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
-        where: { LinkId: LinkID },
-        raw: true
-      });
-      
-      const restrictions = await db.DocumentRestrictions.findAll({
-        where: { LinkID: LinkID, UserID: userId },
-        order: [['CreatedDate', 'DESC']]
-      });
-      
-      const templates = await db.Template.findAll({ raw: true });
-      const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
-      const docwith={
-        document:[{ ...docJson, filepath: null }],
-        versions:versions,
-        collaborations:[],
-        comments:[],
-        auditTrails:auditTrails,
-        restrictions:restrictions,
-        OCRDocumentReadFields:OCRDocumentReadFields,
-        approvalsforusertoacceptorreject:[]
-      };
-      return res.status(200).json({ success: true, data: docwith });
-    }
+     // ⚡ OPTIMIZATION: Log activities in parallel (non-blocking)
+     Promise.all([
+       logAuditTrail(documentId, 'VIEWED', userId, null, null, req, LinkID),
+       logCollaboratorActivity(documentId, userId, 'DOCUMENT_OPENED', req, null, LinkID)
+     ]).catch(err => console.error('Error logging activities:', err));
 
-     // Log view activity
-     await logAuditTrail(documentId, 'VIEWED', req.user.id, null, null, req, LinkID);
-     await logCollaboratorActivity(documentId, req.user.id, 'DOCUMENT_OPENED', req,null,LinkID);
-     const versions= await db.DocumentVersions.findAll({
-           where: { LinkID: LinkID },
-           order: [['ModificationDate', 'DESC']]
-         });
-
-     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
-       where: { LinkId: LinkID },
-       raw :true    });
-       // console.log("OCRDocumentReadFields",OCRDocumentReadFields)
-     const collaborations = await db.DocumentCollaborations.findAll({
-       where: { LinkID: LinkID },
-       include: [
-         {
-           model: db.Users,
-           as: 'Collaborator',
-           
-         },
-         {
-           model: db.CollaboratorActivities,
-           as: 'Activities',
-           // where: { Active: true },
-           required: false
+     // ⚡ FIX: Process restrictions mapping efficiently with null checks
+     const restrictionMap = {};
+     if (Array.isArray(restrictions)) {
+       restrictions.forEach(r => {
+         if (r && r.Field && !restrictionMap[r.Field]) {
+           restrictionMap[r.Field] = true;
          }
-       ]
-       // order: [['AddedDate', 'DESC']]
-     });
-     
-     const comments = await db.DocumentComments.findAll({
-       where: { LinkID: LinkID },
-       include:[
-         {
-           model: db.Users,
-           as: 'commenter',
-           
-         }
-       ],
-       order: [['CommentDate', 'DESC']]
-     });
-     const auditTrails = await db.DocumentAuditTrail.findAll({
-       where: { LinkID: LinkID },
-       include: [
-         {
-           model: db.Users,
-           as: 'actor',
-           attributes: ['ID', 'UserName']
-         }
-       ],
-       order: [['ActionDate', 'DESC']]
-     });
-     const restrictions = await db.DocumentRestrictions.findAll({
-       where: { LinkID: LinkID,UserID:userId },
-       order: [['CreatedDate', 'DESC']]
-     });
-     const updatedArray = OCRDocumentReadFields.map(item => {
-       const match = restrictions.find(el => el.Field === item.Field);
-       // console.log("match",match,"item",item)
-       const newitem=JSON.parse(JSON.stringify(item));
-       if(match){
-         newitem.Restricted = true
-       }
-       else{
-         newitem.Restricted = false
-       }
-       return newitem;
-     });
-
-     const user=await db.Users.findOne({
-     where:{ID:req.user.id},
-       
-     })
-     let userAccess=[]
-     try{
-       userAccess=JSON.parse(user.userAccessArray)
-     }catch(e){}
-     console.log("useraccess array",userAccess)
-     const approvers=await db.DocumentApprovers.findAll({raw:true})
-     console.log("approvers",approvers)
-     const approversaccess=approvers.filter(e=>{
-       if(userAccess.includes(parseInt(e.ApproverID))){
-         return e
-       }
-     })
-       console.log("approversaccess",approversaccess)
-       const accessforthisdoc=approversaccess.find(e =>
-         e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
-       );
-       
-       console.log("accessforthisdoc",accessforthisdoc)
-     const approvalsforthisdoc=await db.DocumentApprovals.findAll({
-             where:{
-               LinkID:document.LinkID
-             }
-             ,raw:true
-           })
-           console.log("accessforthisdoc",accessforthisdoc)
-     const approvalsforusertoacceptorreject=accessforthisdoc?approvalsforthisdoc:[]
-     const templates = await db.Template.findAll({ raw: true });
-     
-     // ⚡ Force processing for detail view - skip cache to regenerate images
-     console.log("Processing document for detail view, DataImage available:", !!document.DataImage);
-     console.log("Document ID:", document.ID, "Document LinkID:", document.LinkID);
-     let processedDocs = [];
-     try {
-       processedDocs = await Promise.all(
-         [document].map(async doc =>
-           await processDocument(doc, restrictions, OCRDocumentReadFields, templates, true)
-         )
-       );
-     } catch (procErr) {
-       console.warn('processDocument failed, returning metadata only:', procErr?.message);
-       processedDocs = [{ filepath: null, error: 'processing_failed' }];
+       });
      }
      
-     // console.log("Processed document:", JSON.stringify(processedDocs[0], (key, value) => {
-     //   if (key === 'DataImage') return '[BLOB DATA REMOVED]';
-     //   return value;
-     // }));
-     console.log("Filepath returned:", processedDocs[0]?.filepath);
+     // ⚡ FIX: Process OCR fields with null checks
+     const updatedArray = Array.isArray(OCRDocumentReadFields) 
+       ? OCRDocumentReadFields.map(item => {
+           if (!item) return null;
+           const newitem = JSON.parse(JSON.stringify(item));
+           newitem.Restricted = restrictionMap[item.Field] || false;
+           return newitem;
+         }).filter(item => item !== null)
+       : [];
+
+     // ⚡ OPTIMIZATION: Process user access and approvers efficiently
+     let userAccess = [];
+     try {
+       userAccess = user?.userAccessArray ? JSON.parse(user.userAccessArray) : [];
+     } catch(e) {
+       console.warn('Error parsing userAccessArray:', e);
+     }
      
-     const docwith={
-       document:processedDocs,
-       versions:versions,
-       collaborations:collaborations,
-       comments:comments,
-       auditTrails:auditTrails,
-       restrictions:restrictions,
-       OCRDocumentReadFields:updatedArray,
-       approvalsforusertoacceptorreject:approvalsforusertoacceptorreject
+     const approversaccess = Array.isArray(approvers) 
+       ? approvers.filter(e => 
+           e && e.ApproverID && userAccess.includes(parseInt(e.ApproverID))
+         )
+       : [];
+     
+     const accessforthisdoc = approversaccess.find(e =>
+       e && e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
+     );
+     
+     const approvalsforusertoacceptorreject = accessforthisdoc && Array.isArray(approvalsforthisdoc) 
+       ? approvalsforthisdoc 
+       : [];
+     
+     // ⚡ OPTIMIZATION: Process document image asynchronously if available
+     let processedDocs = [];
+     if (!document.DataImage || document.DataImage.length === 0) {
+       // No image, return metadata only
+       const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+       processedDocs = [{ ...docJson, filepath: null }];
+     } else {
+       // Process image (this is the heavy operation)
+       try {
+         processedDocs = await Promise.all(
+           [document].map(async doc =>
+             await processDocument(doc, restrictions || [], OCRDocumentReadFields || [], templates || [], true)
+           )
+         );
+       } catch (procErr) {
+         console.warn('processDocument failed, returning metadata only:', procErr?.message);
+         const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+         processedDocs = [{ ...docJson, filepath: null, error: 'processing_failed' }];
+       }
+     }
+     
+     const docwith = {
+       document: processedDocs,
+       versions: versions || [],
+       collaborations: collaborations || [],
+       comments: comments || [],
+       auditTrails: auditTrails || [],
+       restrictions: restrictions || [],
+       OCRDocumentReadFields: updatedArray,
+       approvalsforusertoacceptorreject: approvalsforusertoacceptorreject
      };
+     
      res.status(200).json({
        success: true,
        data: docwith
@@ -2069,6 +2204,7 @@ router.get('/documents/:documentId/analytics',requireAuth, async (req, res) => {
 
    } catch (error) {
      console.error('Error fetching document:', error);
+     console.error('Error stack:', error.stack);
      res.status(500).json({
        success: false,
        message: 'Error fetching document',
@@ -2537,20 +2673,43 @@ const documentbypk=await db.Documents.findByPk(documentId)
 router.get('/documents/:documentId/approvals', async (req, res) => {
   try {
     const { documentId } = req.params;
-    const doc=await db.Documents.findByPk(documentId)
-    const linkid=doc.LinkID
-    const approvals = await db.DocumentApprovals.findAll({
-      where: { LinkID: linkid },
-      order: [['RequestedDate', 'DESC']]
-    });
+    const doc = await db.Documents.findByPk(documentId);
+    
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+    
+    // ⚡ FIX: Handle LinkID type (string or number)
+    const linkid = String(doc.LinkID);
+    const linkidNum = parseInt(doc.LinkID) || linkid;
+    
+    // ⚡ FIX: Try string first, fallback to number
+    let approvals;
+    try {
+      approvals = await db.DocumentApprovals.findAll({
+        where: { LinkID: linkid },
+        order: [['RequestedDate', 'DESC']],
+        raw: true
+      });
+    } catch {
+      approvals = await db.DocumentApprovals.findAll({
+        where: { LinkID: linkidNum },
+        order: [['RequestedDate', 'DESC']],
+        raw: true
+      });
+    }
 
     res.status(200).json({
       success: true,
-      data: approvals
+      data: approvals || []
     });
 
   } catch (error) {
     console.error('Error fetching approvals:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error fetching approvals',
@@ -2730,23 +2889,54 @@ const getApprovalStatusHandler = async (req, res) => {
       });
     }
 
-    const status = await approvalHelper.getApprovalStatus(documentId, document.LinkID);
+    // ⚡ FIX: Handle LinkID type (string or number)
+    const linkId = String(document.LinkID);
+    
+    // ⚡ FIX: Try with error handling
+    let status;
+    try {
+      status = await approvalHelper.getApprovalStatus(documentId, linkId);
+    } catch (helperError) {
+      console.error('Error in approvalHelper.getApprovalStatus:', helperError);
+      // Try with numeric LinkID as fallback
+      const linkIdNum = parseInt(document.LinkID) || linkId;
+      try {
+        status = await approvalHelper.getApprovalStatus(documentId, linkIdNum);
+      } catch (fallbackError) {
+        console.error('Error in approvalHelper fallback:', fallbackError);
+        throw helperError; // Throw original error
+      }
+    }
 
     if (!status) {
       return res.status(200).json({
-        success: false,
+        success: true,
         message: 'No approval tracking found for this document',
-        data: null
+        data: {
+          finalStatus: 'PENDING',
+          allorMajority: 'MAJORITY',
+          currentLevel: 0,
+          totalLevels: 0,
+          levelsCompleted: 0
+        }
       });
     }
 
     res.status(200).json({
       success: true,
-      data: status
+      data: {
+        finalStatus: status.finalStatus || 'PENDING',
+        allorMajority: status.allorMajority || 'MAJORITY',
+        currentLevel: status.currentLevel || 0,
+        totalLevels: status.totalLevels || 0,
+        levelsCompleted: status.tracking?.LevelsCompleted || 0,
+        levelDetails: status.levelDetails || {}
+      }
     });
 
   } catch (error) {
     console.error('Error fetching approval status:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error fetching approval status',
