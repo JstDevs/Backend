@@ -2932,6 +2932,182 @@ const updateApprovalHandler = async (req, res) => {
   }
 };
 
+// CANCEL - Cancel all pending approval requests (must be before :approvalId route)
+const cancelApprovalHandler = async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const { cancellationReason, approverId } = req.body;
+    const cancelledBy = req.user.id || req.user.userName || approverId;
+    const cancelledByName = req.user.userName || req.user.id || approverId;
+
+    // Find document
+    const document = await db.Documents.findByPk(documentId);
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // ⚡ FIX: Handle LinkID type (string or number)
+    const linkId = String(document.LinkID);
+    const linkIdNum = parseInt(document.LinkID) || linkId;
+
+    // Find all pending approval requests for this document
+    let pendingApprovals;
+    try {
+      pendingApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkId,
+          Status: 'PENDING',
+          IsCancelled: false
+        }
+      });
+    } catch {
+      pendingApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdNum,
+          Status: 'PENDING',
+          IsCancelled: false
+        }
+      });
+    }
+
+    if (!pendingApprovals || pendingApprovals.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending approval requests found for this document'
+      });
+    }
+
+    // Store old values for audit trail
+    const oldValues = pendingApprovals.map(approval => approval.toJSON());
+
+    // Cancel all pending approvals
+    const updateData = {
+      IsCancelled: true,
+      Status: 'CANCELLED',
+      ApprovalDate: new Date()
+    };
+
+    // Add cancellation reason to Comments if provided
+    if (cancellationReason) {
+      updateData.Comments = cancellationReason;
+    }
+
+    // Update all pending approvals
+    let updatedCount;
+    try {
+      const [count] = await db.DocumentApprovals.update(updateData, {
+        where: {
+          DocumentID: documentId,
+          LinkID: linkId,
+          Status: 'PENDING',
+          IsCancelled: false
+        }
+      });
+      updatedCount = count;
+    } catch {
+      const [count] = await db.DocumentApprovals.update(updateData, {
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdNum,
+          Status: 'PENDING',
+          IsCancelled: false
+        }
+      });
+      updatedCount = count;
+    }
+
+    // Get updated approvals for response
+    let cancelledApprovals;
+    try {
+      cancelledApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkId,
+          IsCancelled: true,
+          Status: 'CANCELLED'
+        },
+        order: [['RequestedDate', 'DESC']]
+      });
+    } catch {
+      cancelledApprovals = await db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          LinkID: linkIdNum,
+          IsCancelled: true,
+          Status: 'CANCELLED'
+        },
+        order: [['RequestedDate', 'DESC']]
+      });
+    }
+
+    // Update tracking if exists
+    const tracking = await db.DocumentApprovalTracking.findOne({
+      where: { DocumentID: documentId, LinkID: linkId }
+    });
+
+    if (!tracking) {
+      // Try with numeric LinkID
+      const trackingNum = await db.DocumentApprovalTracking.findOne({
+        where: { DocumentID: documentId, LinkID: linkIdNum }
+      });
+      if (trackingNum) {
+        await trackingNum.update({
+          FinalStatus: 'CANCELLED',
+          UpdatedDate: new Date()
+        });
+      }
+    } else {
+      await tracking.update({
+        FinalStatus: 'CANCELLED',
+        UpdatedDate: new Date()
+      });
+    }
+
+    // Log audit trail
+    await logAuditTrail(
+      documentId,
+      'APPROVAL_CANCELLED',
+      cancelledBy,
+      oldValues,
+      {
+        cancelledApprovals: cancelledApprovals.map(a => a.toJSON()),
+        cancellationReason: cancellationReason || null,
+        cancelledBy: cancelledByName
+      },
+      req,
+      document.LinkID
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully cancelled ${updatedCount} approval request(s)`,
+      data: {
+        cancelledCount: updatedCount,
+        cancelledApprovals: cancelledApprovals,
+        cancellationReason: cancellationReason || null,
+        cancelledBy: cancelledByName
+      }
+    });
+
+  } catch (error) {
+    console.error('Error cancelling approvals:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelling approval requests',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+router.put('/documents/:documentId/approvals/cancel', requireAuth, cancelApprovalHandler);
+router.put('/:documentId/approvals/cancel', requireAuth, cancelApprovalHandler);
+
 router.put('/documents/:documentId/approvals/:approvalId', requireAuth, updateApprovalHandler);
 router.put('/:documentId/approvals/:approvalId', requireAuth, updateApprovalHandler);
 
@@ -3006,6 +3182,7 @@ const getApprovalStatusHandler = async (req, res) => {
 
 router.get('/documents/:documentId/approvals/status', requireAuth, getApprovalStatusHandler);
 router.get('/:documentId/approvals/status', requireAuth, getApprovalStatusHandler);
+
 // ==================== RESTRICTIONS CRUD OPERATIONS ====================
 
 // CREATE - Add restriction old, field based only
