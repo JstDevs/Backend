@@ -1363,89 +1363,291 @@ router.get('/get-attachments/:attachmentIDs', async (req, res) => {
   }
 });
 
-router.get('/convert-to-pdfa/:attachmentID', async (req, res) => {
-  try {
-    const { attachmentID } = req.params;
-    
-    const attachment = await Attachment.findByPk(parseInt(attachmentID));
-    if (!attachment || !attachment.DataImage) {
-      req.session.error = 'Attachment not found or invalid.';
-      return res.redirect('/documents');
-    }
+/**
+ * Helper function to find Ghostscript executable path
+ * Supports Windows, Linux, and macOS
+ */
+function getGhostscriptPath() {
+  // Check if path is provided via environment variable
+  if (process.env.GHOSTSCRIPT_PATH && fs.existsSync(process.env.GHOSTSCRIPT_PATH)) {
+    return process.env.GHOSTSCRIPT_PATH;
+  }
 
-    const ghostscriptPath = 'C:\\Program Files\\gs\\gs10.04.0\\bin\\gswin64c.exe';
-    if (!fs.existsSync(ghostscriptPath)) {
-      req.session.error = 'Ghostscript is not installed or not found at the specified path.';
-      return res.redirect('/documents');
+  // Platform-specific default paths
+  const platform = process.platform;
+  const possiblePaths = [];
+
+  if (platform === 'win32') {
+    // Windows paths (checking newer versions first)
+    possiblePaths.push(
+      'C:\\Program Files\\gs\\gs10.06.0\\bin\\gswin64c.exe',
+      'C:\\Program Files (x86)\\gs\\gs10.06.0\\bin\\gswin32c.exe',
+      'C:\\Program Files\\gs\\gs10.04.0\\bin\\gswin64c.exe',
+      'C:\\Program Files (x86)\\gs\\gs10.04.0\\bin\\gswin32c.exe',
+      'C:\\Program Files\\gs\\gs10.03.0\\bin\\gswin64c.exe',
+      'C:\\Program Files (x86)\\gs\\gs10.03.0\\bin\\gswin32c.exe',
+      'C:\\Program Files\\gs\\gs10.02.0\\bin\\gswin64c.exe',
+      'C:\\Program Files (x86)\\gs\\gs10.02.0\\bin\\gswin32c.exe'
+    );
+  } else if (platform === 'linux' || platform === 'darwin') {
+    // Linux and macOS paths
+    possiblePaths.push(
+      '/usr/bin/gs',
+      '/usr/local/bin/gs',
+      '/opt/homebrew/bin/gs' // macOS with Homebrew on Apple Silicon
+    );
+  }
+
+  // Find the first existing path
+  for (const gsPath of possiblePaths) {
+    if (fs.existsSync(gsPath)) {
+      return gsPath;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Helper function to convert PDF buffer to PDF/A format
+ * @param {Buffer} pdfBuffer - The PDF file buffer
+ * @param {string} originalFileName - Original filename for naming output
+ * @returns {Promise<{buffer: Buffer, fileName: string}>} - PDF/A buffer and filename
+ */
+function convertToPdfA(pdfBuffer, originalFileName = 'document.pdf') {
+  return new Promise((resolve, reject) => {
+    const ghostscriptPath = getGhostscriptPath();
+    
+    if (!ghostscriptPath) {
+      return reject(new Error('Ghostscript is not installed or not found. Please install Ghostscript or set GHOSTSCRIPT_PATH environment variable.'));
     }
 
     // Create temporary files
-    const tempInputPath = path.join(__dirname, 'temp', `input_${Date.now()}.pdf`);
-    const tempOutputPath = path.join(__dirname, 'temp', `output_${Date.now()}.pdf`);
-    
-    // Ensure temp directory exists
-    const tempDir = path.dirname(tempInputPath);
+    const tempDir = path.join(__dirname, '../temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    // Write input file
-    fs.writeFileSync(tempInputPath, attachment.DataImage);
+    const timestamp = Date.now();
+    const tempInputPath = path.join(tempDir, `input_${timestamp}.pdf`);
+    const tempOutputPath = path.join(tempDir, `output_${timestamp}.pdf`);
 
-    const args = [
-      '-dPDFA=1',
-      '-dPDFACompatibilityPolicy=1',
-      '-dCompatibilityLevel=1.4',
-      '-sDEVICE=pdfwrite',
-      '-dBATCH',
-      '-dNOPAUSE',
-      '-sColorConversionStrategy=UseDeviceIndependentColor',
-      '-dPDFSETTINGS=/default',
-      '-dNOOUTERSAVE',
-      '-dNOSAFER',
-      `-sOutputFile=${tempOutputPath}`,
-      tempInputPath
-    ];
+    try {
+      // Write input file
+      fs.writeFileSync(tempInputPath, pdfBuffer);
 
-    const ghostscript = spawn(ghostscriptPath, args);
-    
-    ghostscript.on('close', (code) => {
-      try {
-        if (code !== 0 || !fs.existsSync(tempOutputPath)) {
-          console.log(`Ghostscript failed with exit code ${code}`);
-          req.session.error = 'Failed to convert the file to PDF/A format.';
-          return res.redirect('/documents');
+      // Ghostscript arguments for PDF/A conversion
+      const args = [
+        '-dPDFA=1',
+        '-dPDFACompatibilityPolicy=1',
+        '-dCompatibilityLevel=1.4',
+        '-sDEVICE=pdfwrite',
+        '-dBATCH',
+        '-dNOPAUSE',
+        '-sColorConversionStrategy=UseDeviceIndependentColor',
+        '-dPDFSETTINGS=/default',
+        '-dNOOUTERSAVE',
+        '-dNOSAFER',
+        `-sOutputFile=${tempOutputPath}`,
+        tempInputPath
+      ];
+
+      const ghostscript = spawn(ghostscriptPath, args);
+      let errorOutput = '';
+
+      ghostscript.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      ghostscript.on('close', (code) => {
+        try {
+          // Cleanup input file
+          if (fs.existsSync(tempInputPath)) {
+            fs.unlinkSync(tempInputPath);
+          }
+
+          if (code !== 0 || !fs.existsSync(tempOutputPath)) {
+            const error = errorOutput || `Ghostscript failed with exit code ${code}`;
+            console.error('PDF/A conversion error:', error);
+            return reject(new Error(`PDF/A conversion failed: ${error}`));
+          }
+
+          const convertedBytes = fs.readFileSync(tempOutputPath);
+          const baseName = path.parse(originalFileName).name;
+          const fileName = `${baseName}_PDFA.pdf`;
+
+          // Cleanup output file
+          if (fs.existsSync(tempOutputPath)) {
+            fs.unlinkSync(tempOutputPath);
+          }
+
+          resolve({
+            buffer: convertedBytes,
+            fileName: fileName
+          });
+        } catch (error) {
+          // Cleanup on error
+          if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+          if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+          reject(error);
         }
+      });
 
-        const convertedBytes = fs.readFileSync(tempOutputPath);
-        const fileName = `${path.parse(attachment.DataName).name} (PDF/A).pdf`;
-
-        // Cleanup temp files
+      ghostscript.on('error', (error) => {
+        // Cleanup on error
         if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
         if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+        console.error('Ghostscript spawn error:', error);
+        reject(new Error(`Failed to execute Ghostscript: ${error.message}`));
+      });
 
-        res.set({
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="${fileName}"`
-        });
-        res.send(convertedBytes);
-      } catch (error) {
-        console.error('Error in ghostscript close handler:', error);
-        req.session.error = `An error occurred during the conversion: ${error.message}`;
-        res.redirect('/documents');
-      }
-    });
+    } catch (error) {
+      // Cleanup on error
+      if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+      if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+      reject(error);
+    }
+  });
+}
 
-    ghostscript.on('error', (error) => {
-      console.error('Ghostscript error:', error);
-      req.session.error = `An error occurred during the conversion: ${error.message}`;
-      res.redirect('/documents');
+// Legacy endpoint for attachments (keeping for backward compatibility)
+router.get('/convert-to-pdfa/:attachmentID', async (req, res) => {
+  try {
+    const { attachmentID } = req.params;
+    
+    const attachment = await db.Attachment.findByPk(parseInt(attachmentID));
+    if (!attachment || !attachment.DataImage) {
+      return res.status(404).json({ 
+        error: 'Attachment not found or invalid.',
+        success: false 
+      });
+    }
+
+    const result = await convertToPdfA(attachment.DataImage, attachment.DataName || 'document.pdf');
+    
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${result.fileName}"`
     });
+    res.send(result.buffer);
+  } catch (error) {
+    console.error('Error converting to PDF/A:', error);
+    res.status(500).json({ 
+      error: error.message || 'PDF/A conversion failed',
+      success: false 
+    });
+  }
+});
+
+/**
+ * POST /documents/convert-to-pdfa
+ * Converts a PDF file to PDF/A format
+ * Request: multipart/form-data with 'file' field and optional 'documentId'
+ * Response: PDF/A compliant PDF file
+ */
+router.post('/convert-to-pdfa', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        error: 'No file provided. Please upload a PDF file.',
+        success: false 
+      });
+    }
+
+    // Check if file is a PDF
+    const fileMimeType = req.file.mimetype || '';
+    const isPdf = fileMimeType === 'application/pdf' || 
+                  req.file.originalname.toLowerCase().endsWith('.pdf');
+    
+    if (!isPdf) {
+      return res.status(400).json({ 
+        error: 'File must be a PDF document.',
+        success: false 
+      });
+    }
+
+    const documentId = req.body.documentId ? parseInt(req.body.documentId) : null;
+    const originalFileName = req.file.originalname || 'document.pdf';
+
+    // Convert to PDF/A
+    const result = await convertToPdfA(req.file.buffer, originalFileName);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${result.fileName}"`
+    });
+    res.send(result.buffer);
 
   } catch (error) {
     console.error('Error converting to PDF/A:', error);
-    req.session.error = `An error occurred during the conversion: ${error.message}`;
-    res.redirect('/documents');
+    res.status(500).json({ 
+      error: error.message || 'PDF/A conversion failed',
+      success: false 
+    });
+  }
+});
+
+/**
+ * GET /documents/:documentId/convert-to-pdfa
+ * Converts a document from database to PDF/A format
+ * Request: documentId as path parameter
+ * Response: PDF/A compliant PDF file
+ */
+router.get('/documents/:documentId/convert-to-pdfa', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    
+    if (!documentId || isNaN(parseInt(documentId))) {
+      return res.status(400).json({ 
+        error: 'Invalid document ID.',
+        success: false 
+      });
+    }
+
+    // Fetch document from database
+    const document = await Documents.findOne({
+      where: { 
+        ID: parseInt(documentId),
+        Active: true
+      }
+    });
+
+    if (!document || !document.DataImage) {
+      return res.status(404).json({ 
+        error: 'Document not found or has no file data.',
+        success: false 
+      });
+    }
+
+    // Check if document is a PDF
+    const isPdf = (document.DataType === '.pdf' || 
+                   document.DataType === 'pdf' ||
+                   (document.FileName && document.FileName.toLowerCase().endsWith('.pdf')));
+
+    if (!isPdf) {
+      return res.status(400).json({ 
+        error: 'Document is not a PDF file. PDF/A conversion only works for PDF documents.',
+        success: false 
+      });
+    }
+
+    const originalFileName = document.FileName || document.DataName || 'document.pdf';
+
+    // Convert to PDF/A
+    const result = await convertToPdfA(document.DataImage, originalFileName);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${result.fileName}"`
+    });
+    res.send(result.buffer);
+
+  } catch (error) {
+    console.error('Error converting to PDF/A:', error);
+    res.status(500).json({ 
+      error: error.message || 'PDF/A conversion failed',
+      success: false 
+    });
   }
 });
 
