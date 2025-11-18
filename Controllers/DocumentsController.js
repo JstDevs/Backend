@@ -1659,7 +1659,10 @@ router.get('/documents/:userid', async (req, res) => {
   try {
     const { userId, page = 1, limit = 10, search = '', status = 'all' } = req.query;
     const {userid}=req.params
-    const offset = (page - 1) * limit;
+    // ⚡ FIX: Ensure limit and page are properly parsed as integers
+    const parsedLimit = parseInt(limit, 10) || 10;
+    const parsedPage = parseInt(page, 10) || 1;
+    const offset = (parsedPage - 1) * parsedLimit;
 
     let whereClause = { Active: true };
     
@@ -1687,8 +1690,8 @@ router.get('/documents/:userid', async (req, res) => {
         attributes: {
           exclude: ['DataImage'] // Skip BLOB data
         },
-        limit: parseInt(limit),
-        offset: parseInt(offset),
+        limit: parsedLimit,
+        offset: offset,
         order: [['CreatedDate', 'DESC']]
       })
     ]);
@@ -1806,10 +1809,10 @@ router.get('/documents/:userid', async (req, res) => {
       data: {
         documents: newdocuments,
         pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(documents.count / limit),
+          currentPage: parsedPage,
+          totalPages: Math.ceil(documents.count / parsedLimit) || 1,
           totalItems: documents.count,
-          itemsPerPage: parseInt(limit)
+          itemsPerPage: parsedLimit
         }
       }
     });
@@ -1828,7 +1831,10 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
   try {
     const { userId, page = 1, limit = 10, search = '', status = 'all' } = req.query;
     const {userid}=req.params
-    const offset = (page - 1) * limit;
+    // ⚡ FIX: Ensure limit and page are properly parsed as integers
+    const parsedLimit = parseInt(limit, 10) || 10;
+    const parsedPage = parseInt(page, 10) || 1;
+    const offset = (parsedPage - 1) * parsedLimit;
 
     let whereClause = { Active: true };
     
@@ -1850,10 +1856,8 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
     // console.log("restrictions",restrictions)
     const documents = await db.Documents.findAndCountAll({
       where: whereClause,
-    
-      
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+      limit: parsedLimit,
+      offset: offset,
       order: [['CreatedDate', 'DESC']]
     });
     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
@@ -1933,10 +1937,10 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
       data: {
         documents: newdocuments,
         pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(documents.count / limit),
+          currentPage: parsedPage,
+          totalPages: Math.ceil(documents.count / parsedLimit) || 1,
           totalItems: documents.count,
-          itemsPerPage: parseInt(limit)
+          itemsPerPage: parsedLimit
         }
       }
     });
@@ -1960,7 +1964,10 @@ router.get('/alldocuments/:userid', async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '' } = req.query;
     const { userid } = req.params;
-    const offset = (page - 1) * limit;
+    // ⚡ FIX: Ensure limit and page are properly parsed as integers
+    const parsedLimit = parseInt(limit, 10) || 10;
+    const parsedPage = parseInt(page, 10) || 1;
+    const offset = (parsedPage - 1) * parsedLimit;
 
     const whereClause = buildWhereClause(search);
 
@@ -1975,8 +1982,8 @@ router.get('/alldocuments/:userid', async (req, res) => {
         attributes: {
           exclude: ['DataImage'] // 🚀 Skip BLOB data for list view
         },
-        limit: parseInt(limit),
-        offset: parseInt(offset),
+        limit: parsedLimit,
+        offset: offset,
         order: [['CreatedDate', 'DESC']]
       }),
       db.OCRDocumentReadFields.findAll({ 
@@ -2084,10 +2091,10 @@ router.get('/alldocuments/:userid', async (req, res) => {
       data: {
         documents: processedDocs,
         pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(documents.count / limit),
+          currentPage: parsedPage,
+          totalPages: Math.ceil(documents.count / parsedLimit) || 1,
           totalItems: documents.count,
-          itemsPerPage: parseInt(limit)
+          itemsPerPage: parsedLimit
         }
       }
     });
