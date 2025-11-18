@@ -30,8 +30,19 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     metadata: {
-      type: DataTypes.JSON,
-      allowNull: true
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const rawValue = this.getDataValue('metadata');
+        try {
+          return rawValue ? JSON.parse(rawValue) : null;
+        } catch (err) {
+          return null;
+        }
+      },
+      set(value) {
+        this.setDataValue('metadata', value ? JSON.stringify(value) : null);
+      }
     },
     timestamp: {
       type: DataTypes.DATE,
@@ -65,18 +76,26 @@ module.exports = (sequelize, DataTypes) => {
   });
 
   AuditActivitiesModel.associate = function (models) {
-    AuditActivitiesModel.belongsTo(models.Users, {
-      foreignKey: 'user_id',
-      targetKey: 'ID',
-      as: 'user'
-    });
+    // ⚡ FIX: Make associations optional to avoid foreign key constraint issues
+    // Remove or comment out if foreign keys are not needed in database
+    if (models.Users) {
+      AuditActivitiesModel.belongsTo(models.Users, {
+        foreignKey: 'user_id',
+        targetKey: 'ID',
+        as: 'user',
+        constraints: false // ⚡ FIX: Disable foreign key constraint in Sequelize
+      });
+    }
     
-    AuditActivitiesModel.belongsTo(models.Documents, {
-      foreignKey: 'document_id',
-      targetKey: 'ID',
-      as: 'document',
-      required: false
-    });
+    if (models.Documents) {
+      AuditActivitiesModel.belongsTo(models.Documents, {
+        foreignKey: 'document_id',
+        targetKey: 'ID',
+        as: 'document',
+        required: false,
+        constraints: false // ⚡ FIX: Disable foreign key constraint in Sequelize
+      });
+    }
   };
 
   return AuditActivitiesModel;

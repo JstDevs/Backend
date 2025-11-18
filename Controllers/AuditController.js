@@ -6,6 +6,16 @@ const db = require('../config/database');
 // POST /audit/activity - Log audit activity
 router.post('/activity', async (req, res) => {
   try {
+    // ⚡ FIX: Check if model exists
+    if (!db.AuditActivities) {
+      console.error('AuditActivities model not found in db object');
+      return res.status(500).json({
+        success: false,
+        message: 'AuditActivities model not initialized',
+        error: 'Model not found in database configuration'
+      });
+    }
+
     const {
       action,
       userId,
@@ -27,19 +37,54 @@ router.post('/activity', async (req, res) => {
       });
     }
 
+    // ⚡ FIX: Check if user exists to avoid foreign key constraint error
+    // If user doesn't exist, we'll log a warning but still try to insert
+    // (This assumes the foreign key constraint will be removed or made optional)
+    try {
+      if (db.Users) {
+        const userExists = await db.Users.findByPk(userId);
+        if (!userExists) {
+          console.warn(`⚠️ WARNING: User ID ${userId} does not exist in Users table.`);
+          console.warn(`   This will cause a foreign key constraint error if the constraint exists.`);
+          console.warn(`   Solution: Run the SQL script to remove the foreign key constraint.`);
+        }
+      }
+    } catch (userCheckError) {
+      console.warn('Could not verify user existence:', userCheckError.message);
+    }
+
     // Create audit activity record
-    const auditActivity = await db.AuditActivities.create({
-      action,
-      user_id: userId,
-      user_name: userName,
-      document_id: documentId || null,
-      document_name: documentName || null,
-      details: details || null,
-      metadata: metadata || null,
-      timestamp: timestamp ? new Date(timestamp) : new Date(),
-      ip_address: ipAddress || req.ip,
-      user_agent: userAgent || req.get('User-Agent')
-    });
+    // Note: Model's setter will automatically handle JSON stringification for metadata
+    // ⚡ FIX: Use raw query to bypass foreign key constraint if needed
+    // This is a workaround until the foreign key constraint is removed
+    let auditActivity;
+    try {
+      auditActivity = await db.AuditActivities.create({
+        action,
+        user_id: userId,
+        user_name: userName,
+        document_id: documentId || null,
+        document_name: documentName || null,
+        details: details || null,
+        metadata: metadata || null, // Model setter will handle JSON conversion
+        timestamp: timestamp ? new Date(timestamp) : new Date(),
+        ip_address: ipAddress || req.ip,
+        user_agent: userAgent || req.get('User-Agent')
+      });
+    } catch (fkError) {
+      // If foreign key constraint error, the database constraint will still block it
+      // The best solution is to remove the foreign key constraint from the database
+      // See: scripts/fix_audit_activities_foreign_key.sql
+      if (fkError.name === 'SequelizeForeignKeyConstraintError') {
+        console.error('❌ Foreign key constraint error:');
+        console.error(`   User ID ${userId} does not exist in Users table.`);
+        console.error('   Solution: Run this SQL to remove the foreign key constraint:');
+        console.error('   ALTER TABLE `audit_activities` DROP FOREIGN KEY `audit_activities_ibfk_1`;');
+        throw new Error(`User ID ${userId} does not exist. Please remove the foreign key constraint or ensure the user exists.`);
+      } else {
+        throw fkError; // Re-throw if it's a different error
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -52,11 +97,41 @@ router.post('/activity', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error logging audit activity:', error);
+    console.error('❌ Error logging audit activity:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('Request body:', JSON.stringify(req.body, null, 2));
+    
+    // Check for common database errors
+    let errorMessage = 'Failed to log activity';
+    let errorDetails = {};
+    
+    if (error.name === 'SequelizeDatabaseError') {
+      if (error.message.includes("doesn't exist") || error.message.includes("Unknown table")) {
+        errorMessage = 'Database table "audit_activities" does not exist. Please create the table first.';
+        errorDetails.tableError = true;
+        errorDetails.sqlMessage = error.message;
+      } else if (error.message.includes("Unknown column")) {
+        errorMessage = 'Database table structure mismatch. Please check table columns.';
+        errorDetails.columnError = true;
+        errorDetails.sqlMessage = error.message;
+      }
+    } else if (error.name === 'SequelizeValidationError') {
+      errorMessage = 'Validation error: ' + error.errors.map(e => e.message).join(', ');
+      errorDetails.validationErrors = error.errors;
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Failed to log activity',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        ...errorDetails,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n') // First 5 lines of stack
+      } : undefined
     });
   }
 });
