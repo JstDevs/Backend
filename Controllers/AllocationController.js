@@ -447,6 +447,10 @@ router.get('/add-user', async (req, res) => {
 
 router.post('/add-user', requireAuth, async (req, res) => {
     try {
+        console.log('=== add-user POST request received ===');
+        console.log('Request body:', JSON.stringify(req.body, null, 2));
+        console.log('User from auth:', req.user);
+        
         const {
             depid, subdepid, userid,
             View = false, Add = false, Edit = false,
@@ -455,8 +459,22 @@ router.post('/add-user', requireAuth, async (req, res) => {
             fields
         } = req.body;
         
-        const createdBy = req.user.userName || null;
+        // Validate required fields
+        if (!depid || !subdepid || !userid) {
+            console.error('Missing required fields:', { depid, subdepid, userid });
+            return res.status(400).json({ 
+                error: 'Missing required fields', 
+                details: 'depid, subdepid, and userid are required' 
+            });
+        }
+        
+        // Ensure fields has a default value (empty array) if not provided
+        const fieldsValue = fields !== undefined && fields !== null ? fields : [];
+        
+        const createdBy = req.user?.userName || null;
         const createdDate = new Date();
+        
+        console.log('Processing with:', { depid, subdepid, userid, fieldsValue: Array.isArray(fieldsValue) ? fieldsValue.length : fieldsValue });
         
         // Check if user already has an allocation for this dept/subdept combination
         // by checking AssignSubDepartment first
@@ -473,7 +491,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
         
         if (userAssignSubDep) {
             // User already has an AssignSubDepartment record, use its LinkID
-            linkid = userAssignSubDep.LinkID;
+            linkid = String(userAssignSubDep.LinkID); // Ensure it's a string
             
             // Check if DocumentAccess exists for this LinkID and UserID
             const existingAccess = await DocumentAccess.findOne({
@@ -482,11 +500,10 @@ router.post('/add-user', requireAuth, async (req, res) => {
             
             if (existingAccess) {
                 // Update existing allocation
-                await DocumentAccess.update({
+                const updateData = {
                     Active: true,
                     View: View,
                     Add: Add,
-                    fields: fields,
                     Edit: Edit,
                     Delete: Delete,
                     Print: Print,
@@ -495,7 +512,14 @@ router.post('/add-user', requireAuth, async (req, res) => {
                     Collaborate: Collaborate,
                     Finalize: Finalize,
                     Masking: Masking
-                }, {
+                };
+                
+                // Only include fields if provided
+                if (fields !== undefined && fields !== null) {
+                    updateData.fields = fieldsValue;
+                }
+                
+                await DocumentAccess.update(updateData, {
                     where: { LinkID: linkid, UserID: userid }
                 });
                 
@@ -525,7 +549,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
             
             if (existingAssignSubDep) {
                 // Reuse existing LinkID for this dept/subdept
-                linkid = existingAssignSubDep.LinkID;
+                linkid = String(existingAssignSubDep.LinkID); // Ensure it's a string
                 
                 // Check if DocumentAccess already exists (shouldn't happen, but check anyway)
                 const existingAccess = await DocumentAccess.findOne({
@@ -534,11 +558,10 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 
                 if (existingAccess) {
                     // Update existing
-                    await DocumentAccess.update({
+                    const updateData = {
                         Active: true,
                         View: View,
                         Add: Add,
-                        fields: fields,
                         Edit: Edit,
                         Delete: Delete,
                         Print: Print,
@@ -547,28 +570,76 @@ router.post('/add-user', requireAuth, async (req, res) => {
                         Collaborate: Collaborate,
                         Finalize: Finalize,
                         Masking: Masking
-                    }, {
+                    };
+                    
+                    // Only include fields if provided
+                    if (fields !== undefined && fields !== null) {
+                        updateData.fields = fieldsValue;
+                    }
+                    
+                    await DocumentAccess.update(updateData, {
                         where: { LinkID: linkid, UserID: userid }
                     });
                     isUpdate = true;
                 }
             } else {
                 // No existing assignment for this dept/subdept, create new LinkID
-                linkid = parseInt(generateLinkID());
+                linkid = generateLinkID(); // Keep as string, don't parseInt
             }
         }
         
         // Create AssignSubDepartment record if it doesn't exist
         if (!userAssignSubDep) {
-            await db.AssignSubDepartment.create({
-                LinkID: linkid,
-                DepartmentID: depid,
-                SubDepartmentID: subdepid,
-                UserID: userid,
-                Active: true,
-                CreatedBy: createdBy,
-                CreatedDate: createdDate
-            });
+            try {
+                // Use findOrCreate to avoid primary key conflicts
+                // Since LinkID is primary key, we check by LinkID first
+                const [assignSubDepRecord, created] = await db.AssignSubDepartment.findOrCreate({
+                    where: { LinkID: linkid },
+                    defaults: {
+                        LinkID: linkid,
+                        DepartmentID: depid,
+                        SubDepartmentID: subdepid,
+                        UserID: userid,
+                        Active: true,
+                        CreatedBy: createdBy,
+                        CreatedDate: createdDate
+                    }
+                });
+                
+                // If record already existed, update it to ensure it's active and has correct user
+                if (!created) {
+                    await db.AssignSubDepartment.update({
+                        DepartmentID: depid,
+                        SubDepartmentID: subdepid,
+                        UserID: userid,
+                        Active: true,
+                        CreatedBy: createdBy,
+                        CreatedDate: createdDate
+                    }, {
+                        where: { LinkID: linkid }
+                    });
+                }
+                
+                console.log('AssignSubDepartment record:', created ? 'created' : 'updated', 'for LinkID:', linkid);
+            } catch (createError) {
+                console.error('Error creating/updating AssignSubDepartment:', createError);
+                // If it's a unique constraint error, the record might already exist
+                // Try to update it instead
+                if (createError.name === 'SequelizeUniqueConstraintError') {
+                    await db.AssignSubDepartment.update({
+                        DepartmentID: depid,
+                        SubDepartmentID: subdepid,
+                        UserID: userid,
+                        Active: true,
+                        CreatedBy: createdBy,
+                        CreatedDate: createdDate
+                    }, {
+                        where: { LinkID: linkid }
+                    });
+                } else {
+                    throw createError; // Re-throw if it's a different error
+                }
+            }
         }
         
         // Create DocumentAccess if it doesn't exist (or update if it does)
@@ -578,11 +649,10 @@ router.post('/add-user', requireAuth, async (req, res) => {
             });
 
             if (existingAccess) {
-                await DocumentAccess.update({
+                const updateData = {
                     Active: true,
                     View: View,
                     Add: Add,
-                    fields: fields,
                     Edit: Edit,
                     Delete: Delete,
                     Print: Print,
@@ -591,7 +661,14 @@ router.post('/add-user', requireAuth, async (req, res) => {
                     Collaborate: Collaborate,
                     Finalize: Finalize,
                     Masking: Masking
-                }, {
+                };
+                
+                // Only include fields if provided
+                if (fields !== undefined && fields !== null) {
+                    updateData.fields = fieldsValue;
+                }
+                
+                await DocumentAccess.update(updateData, {
                     where: { LinkID: linkid, UserID: userid }
                 });
             } else {
@@ -601,7 +678,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                     View: View,
                     Add: Add,
                     Edit: Edit,
-                    fields: fields,
+                    fields: fieldsValue, // Use the default empty array if not provided
                     Delete: Delete,
                     Print: Print,
                     Confidential: Confidential,
@@ -616,13 +693,44 @@ router.post('/add-user', requireAuth, async (req, res) => {
             }
         }
 
+        console.log('=== add-user POST request completed successfully ===');
         res.json({
             status: true,
             message: isUpdate ? 'Allocation updated successfully' : 'Allocation created successfully'
         });
     } catch (error) {
-        console.error('Error in add-user POST route:', error);
-        res.status(500).json({ error: 'Internal server error', details: error.message });
+        console.error('=== Error in add-user POST route ===');
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        console.error('Error details:', {
+            code: error.code,
+            errno: error.errno,
+            sqlState: error.sqlState,
+            sqlMessage: error.sqlMessage,
+            sql: error.sql
+        });
+        
+        // Provide more specific error messages
+        let errorMessage = 'Internal server error';
+        let errorDetails = error.message;
+        
+        if (error.name === 'SequelizeValidationError') {
+            errorMessage = 'Validation error';
+            errorDetails = error.errors.map(e => e.message).join(', ');
+        } else if (error.name === 'SequelizeUniqueConstraintError') {
+            errorMessage = 'Duplicate entry';
+            errorDetails = error.errors.map(e => e.message).join(', ');
+        } else if (error.name === 'SequelizeDatabaseError') {
+            errorMessage = 'Database error';
+            errorDetails = error.message;
+        }
+        
+        res.status(500).json({ 
+            error: errorMessage, 
+            details: errorDetails,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 });
 
