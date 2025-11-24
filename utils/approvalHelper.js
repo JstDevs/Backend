@@ -13,29 +13,41 @@ async function getApprovalMatrix(departmentId, subDepartmentId) {
       ? parseInt(subDepartmentId, 10)
       : null;
 
-    const whereClause = {
-      DepartmentId: deptIdInt,
-      subDepID: subDeptIdInt,
-      Active: true
-    };
-
-    let matrix = await db.approvalmatrix.findOne({
-      where: {
-        DepartmentId: deptIdInt,
-        subDepID: subDeptIdInt,
-        Active: true
-      }
-    });
-
-    // Fallback: if no department-specific matrix, allow DepartmentId 0 (global)
-    if (!matrix && deptIdInt !== null) {
+    let matrix = null;
+    
+    // Try querying with DepartmentId first (if column exists)
+    try {
       matrix = await db.approvalmatrix.findOne({
         where: {
-          DepartmentId: 0,
+          DepartmentId: deptIdInt,
           subDepID: subDeptIdInt,
           Active: true
         }
       });
+
+      // Fallback: if no department-specific matrix, allow DepartmentId 0 (global)
+      if (!matrix && deptIdInt !== null) {
+        matrix = await db.approvalmatrix.findOne({
+          where: {
+            DepartmentId: 0,
+            subDepID: subDeptIdInt,
+            Active: true
+          }
+        });
+      }
+    } catch (deptError) {
+      // If DepartmentId column doesn't exist, try querying without it
+      if (deptError.message && (deptError.message.includes('Unknown column') || deptError.message.includes('Invalid column'))) {
+        console.warn('DepartmentId column not found, querying without it');
+        matrix = await db.approvalmatrix.findOne({
+          where: {
+            subDepID: subDeptIdInt,
+            Active: true
+          }
+        });
+      } else {
+        throw deptError;
+      }
     }
 
     return matrix;
@@ -123,6 +135,9 @@ async function createApprovalRequestsForLevel(documentId, linkId, level, request
       throw new Error('Document not found');
     }
 
+    // Ensure LinkID is a string
+    const linkIdStr = String(linkId || document.LinkID || documentId);
+
     const approvers = await getApproversByLevel(document.DepartmentId, document.SubDepartmentId, level);
     
     if (approvers.length === 0) {
@@ -138,7 +153,7 @@ async function createApprovalRequestsForLevel(documentId, linkId, level, request
 
       const approvalRequest = await db.DocumentApprovals.create({
         DocumentID: documentId,
-        LinkID: linkId,
+        LinkID: linkIdStr,
         RequestedBy: requestedBy,
         RequestedDate: new Date(),
         ApproverID: approver.ApproverID,
@@ -191,14 +206,17 @@ async function cancelRemainingRequests(documentId, linkId, level, approvedReques
  */
 async function getOrCreateTracking(documentId, linkId, departmentId, subDepartmentId, totalLevels, allorMajority) {
   try {
+    // Ensure LinkID is a string
+    const linkIdStr = String(linkId || documentId);
+    
     let tracking = await db.DocumentApprovalTracking.findOne({
-      where: { DocumentID: documentId, LinkID: linkId }
+      where: { DocumentID: documentId, LinkID: linkIdStr }
     });
 
     if (!tracking) {
       tracking = await db.DocumentApprovalTracking.create({
         DocumentID: documentId,
-        LinkID: linkId,
+        LinkID: linkIdStr,
         DepartmentId: departmentId,
         SubDepartmentId: subDepartmentId,
         CurrentLevel: 1,

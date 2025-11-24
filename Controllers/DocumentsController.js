@@ -2790,6 +2790,14 @@ const approvalHelper = require('../utils/approvalHelper');
 const createApprovalRequestHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
+    
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+    
     const requestedBy = req.user.id || req.user.userName;
 
     const document = await db.Documents.findByPk(documentId);
@@ -2800,9 +2808,20 @@ const createApprovalRequestHandler = async (req, res) => {
       });
     }
 
+    // Ensure LinkID is a string
+    const linkId = String(document.LinkID || documentId);
+
+    // Validate DepartmentId and SubDepartmentId
+    if (!document.DepartmentId || !document.SubDepartmentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Document must have DepartmentId and SubDepartmentId to request approval'
+      });
+    }
+
     // Check if approval already requested
     const existingTracking = await db.DocumentApprovalTracking.findOne({
-      where: { DocumentID: documentId, LinkID: document.LinkID }
+      where: { DocumentID: documentId, LinkID: linkId }
     });
 
     if (existingTracking) {
@@ -2821,7 +2840,7 @@ const createApprovalRequestHandler = async (req, res) => {
       }, {
         where: {
           DocumentID: documentId,
-          LinkID: document.LinkID
+          LinkID: linkId
         }
       });
     }
@@ -2847,7 +2866,7 @@ const createApprovalRequestHandler = async (req, res) => {
     // Create tracking record
     const tracking = await approvalHelper.getOrCreateTracking(
       documentId,
-      document.LinkID,
+      linkId,
       document.DepartmentId,
       document.SubDepartmentId,
       totalLevels,
@@ -2857,12 +2876,12 @@ const createApprovalRequestHandler = async (req, res) => {
     // Create approval requests for Level 1
     const requests = await approvalHelper.createApprovalRequestsForLevel(
       documentId,
-      document.LinkID,
+      linkId,
       1,
       requestedBy
     );
 
-    await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, { tracking, requests }, req, document.LinkID);
+    await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, { tracking, requests }, req, linkId);
 
     res.status(201).json({
       success: true,
@@ -2877,10 +2896,12 @@ const createApprovalRequestHandler = async (req, res) => {
 
   } catch (error) {
     console.error('Error requesting approval:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error requesting approval',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
@@ -3334,7 +3355,7 @@ const getApprovalStatusHandler = async (req, res) => {
     }
 
     // ⚡ FIX: Handle LinkID type (string or number)
-    const linkId = String(document.LinkID);
+    const linkId = String(document.LinkID || documentId);
     
     // ⚡ FIX: Try with error handling
     let status;
@@ -3342,12 +3363,14 @@ const getApprovalStatusHandler = async (req, res) => {
       status = await approvalHelper.getApprovalStatus(documentId, linkId);
     } catch (helperError) {
       console.error('Error in approvalHelper.getApprovalStatus:', helperError);
+      console.error('Helper error stack:', helperError.stack);
       // Try with numeric LinkID as fallback
-      const linkIdNum = parseInt(document.LinkID) || linkId;
+      const linkIdNum = parseInt(document.LinkID) || documentId;
       try {
         status = await approvalHelper.getApprovalStatus(documentId, linkIdNum);
       } catch (fallbackError) {
         console.error('Error in approvalHelper fallback:', fallbackError);
+        console.error('Fallback error stack:', fallbackError.stack);
         throw helperError; // Throw original error
       }
     }

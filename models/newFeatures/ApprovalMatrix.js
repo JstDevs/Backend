@@ -13,6 +13,10 @@ module.exports = (sequelize, DataTypes) => {
     //   type: DataTypes.BIGINT,
     //   allowNull: false
     // },
+    DepartmentId: {
+      type: DataTypes.BIGINT,
+      allowNull: true
+    },
     subDepID: {
       type: DataTypes.BIGINT,
       allowNull: false
