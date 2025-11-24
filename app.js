@@ -48,7 +48,8 @@ const corsOptions = {
       'https://dms-frontend-phi.vercel.app',
       'https://staging-portal.testthelink.online',
       'http://localhost:5173',
-      'http://127.0.0.1:5173'
+      'http://127.0.0.1:5173',
+      'http://192.168.1.215:5173'   // ← IDAGDAG ITO
     ];
 
     // Allow requests with no origin (Postman, curl, mobile apps)
