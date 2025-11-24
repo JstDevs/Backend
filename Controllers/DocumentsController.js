@@ -8,7 +8,7 @@ const fsPromises = require('fs').promises;
 const { spawn } = require('child_process');
 const router = express.Router();
 const db = require('../config/database');
-const { checkUserPermission } = require('../utils/checkPermission'); 
+const { checkUserPermission, diagnosePermissionIssue } = require('../utils/checkPermission'); 
 const DocumentApprovers = db.DocumentApprovers;
 const { calculatePageCount } = require('../utils/calculatePageCount');
 // Configure multer for file uploads
@@ -2139,23 +2139,84 @@ const getDocumentAnalyticsHandler = async (req, res) => {
      const subDepartmentId = latestestdocument.SubDepartmentId;
      const isConfidential = latestestdocument.Confidential === true || latestestdocument.Confidential === 1;
      
+     // ⚡ DEBUG: Log permission check details
+     console.log('Permission Check:', {
+       userId,
+       documentId,
+       departmentId,
+       subDepartmentId,
+       isConfidential
+     });
+     
      // ⚡ OPTIMIZATION: Check permissions in parallel
      const [hasViewPermission, hasConfidentialPermission] = await Promise.all([
        checkUserPermission(userId, departmentId, subDepartmentId, 'View'),
        isConfidential ? checkUserPermission(userId, departmentId, subDepartmentId, 'Confidential') : Promise.resolve(true)
      ]);
      
+     // ⚡ DEBUG: Log permission results
+     console.log('Permission Results:', {
+       hasViewPermission,
+       hasConfidentialPermission,
+       isConfidential
+     });
+     
      if (!hasViewPermission) {
+       console.log('403 Error: User does not have View permission', {
+         userId,
+         departmentId,
+         subDepartmentId
+       });
+       
+       // Get diagnostic information to help debug
+       let diagnostics = null;
+       try {
+         diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
+         console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
+       } catch (diagError) {
+         console.error('Error getting diagnostics:', diagError);
+       }
+       
        return res.status(403).json({
          success: false,
-         message: 'You do not have permission to view documents in this department and document type'
+         message: 'You do not have permission to view documents in this department and document type',
+         details: {
+           userId,
+           departmentId,
+           subDepartmentId,
+           documentId
+         },
+         diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
        });
      }
      
      if (isConfidential && !hasConfidentialPermission) {
+       console.log('403 Error: User does not have Confidential permission', {
+         userId,
+         departmentId,
+         subDepartmentId
+       });
+       
+       // Get diagnostic information to help debug
+       let diagnostics = null;
+       try {
+         diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
+         console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
+       } catch (diagError) {
+         console.error('Error getting diagnostics:', diagError);
+       }
+       
        return res.status(403).json({
          success: false,
-         message: 'You do not have permission to view confidential documents in this department and document type'
+         message: 'You do not have permission to view confidential documents in this department and document type',
+         details: {
+           userId,
+           departmentId,
+           subDepartmentId,
+           documentId,
+           isConfidential: true
+         },
+         diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
        });
      }
      
@@ -3345,14 +3406,24 @@ router.put('/:documentId/approvals/:approvalId', requireAuth, updateApprovalHand
 const getApprovalStatusHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
+    console.log('Getting approval status for document:', documentId);
+    
     const document = await db.Documents.findByPk(documentId);
     
     if (!document) {
+      console.log('Document not found:', documentId);
       return res.status(404).json({
         success: false,
         message: 'Document not found'
       });
     }
+
+    console.log('Document found:', {
+      ID: document.ID,
+      LinkID: document.LinkID,
+      DepartmentId: document.DepartmentId,
+      SubDepartmentId: document.SubDepartmentId
+    });
 
     // ⚡ FIX: Handle LinkID type (string or number)
     const linkId = String(document.LinkID || documentId);
@@ -3360,22 +3431,29 @@ const getApprovalStatusHandler = async (req, res) => {
     // ⚡ FIX: Try with error handling
     let status;
     try {
+      console.log('Calling approvalHelper.getApprovalStatus with:', { documentId, linkId });
       status = await approvalHelper.getApprovalStatus(documentId, linkId);
+      console.log('Approval status retrieved successfully');
     } catch (helperError) {
       console.error('Error in approvalHelper.getApprovalStatus:', helperError);
+      console.error('Helper error message:', helperError.message);
       console.error('Helper error stack:', helperError.stack);
       // Try with numeric LinkID as fallback
       const linkIdNum = parseInt(document.LinkID) || documentId;
       try {
+        console.log('Trying fallback with numeric LinkID:', linkIdNum);
         status = await approvalHelper.getApprovalStatus(documentId, linkIdNum);
+        console.log('Fallback succeeded');
       } catch (fallbackError) {
         console.error('Error in approvalHelper fallback:', fallbackError);
+        console.error('Fallback error message:', fallbackError.message);
         console.error('Fallback error stack:', fallbackError.stack);
         throw helperError; // Throw original error
       }
     }
 
     if (!status) {
+      console.log('No approval status found, returning default');
       return res.status(200).json({
         success: true,
         message: 'No approval tracking found for this document',
@@ -3388,6 +3466,13 @@ const getApprovalStatusHandler = async (req, res) => {
         }
       });
     }
+
+    console.log('Returning approval status:', {
+      finalStatus: status.finalStatus,
+      allorMajority: status.allorMajority,
+      currentLevel: status.currentLevel,
+      totalLevels: status.totalLevels
+    });
 
     res.status(200).json({
       success: true,
@@ -3403,11 +3488,26 @@ const getApprovalStatusHandler = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching approval status:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
+    
+    // Log additional error details if available
+    if (error.sql) {
+      console.error('SQL Error:', error.sql);
+    }
+    if (error.original) {
+      console.error('Original error:', error.original);
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error fetching approval status',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        stack: error.stack
+      } : undefined
     });
   }
 };

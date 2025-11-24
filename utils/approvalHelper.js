@@ -423,6 +423,8 @@ async function calculateFinalStatus(documentId, linkId) {
  */
 async function getApprovalStatus(documentId, linkId) {
   try {
+    console.log('getApprovalStatus called with:', { documentId, linkId, linkIdType: typeof linkId });
+    
     // ⚡ FIX: Handle LinkID type (string or number)
     const linkIdStr = String(linkId);
     const linkIdNum = parseInt(linkId) || linkIdStr;
@@ -430,24 +432,62 @@ async function getApprovalStatus(documentId, linkId) {
     // ⚡ FIX: Try string first, fallback to number
     let tracking;
     try {
+      console.log('Fetching tracking with string LinkID:', linkIdStr);
       tracking = await db.DocumentApprovalTracking.findOne({
         where: { DocumentID: documentId, LinkID: linkIdStr }
       });
-    } catch {
-      tracking = await db.DocumentApprovalTracking.findOne({
-        where: { DocumentID: documentId, LinkID: linkIdNum }
-      });
+      console.log('Tracking found with string LinkID:', tracking ? 'Yes' : 'No');
+    } catch (trackingError) {
+      console.error('Error fetching tracking with string LinkID:', trackingError.message);
+      try {
+        console.log('Trying numeric LinkID:', linkIdNum);
+        tracking = await db.DocumentApprovalTracking.findOne({
+          where: { DocumentID: documentId, LinkID: linkIdNum }
+        });
+        console.log('Tracking found with numeric LinkID:', tracking ? 'Yes' : 'No');
+      } catch (numError) {
+        console.error('Error fetching tracking with numeric LinkID:', numError.message);
+        throw trackingError; // Throw original error
+      }
     }
 
     if (!tracking) {
+      console.log('No tracking record found for document:', documentId);
       return null;
     }
 
-    const levelDecisions = await getAllLevelDecisions(documentId, linkIdStr);
+    console.log('Tracking record found:', {
+      DocumentID: tracking.DocumentID,
+      LinkID: tracking.LinkID,
+      TotalLevels: tracking.TotalLevels,
+      CurrentLevel: tracking.CurrentLevel,
+      FinalStatus: tracking.FinalStatus
+    });
+
+    // Get level decisions with error handling
+    let levelDecisions = {};
+    try {
+      console.log('Getting level decisions with string LinkID');
+      levelDecisions = await getAllLevelDecisions(documentId, linkIdStr);
+      console.log('Level decisions retrieved:', Object.keys(levelDecisions).length, 'levels');
+    } catch (levelDecisionsError) {
+      console.error('Error in getAllLevelDecisions:', levelDecisionsError.message);
+      // Try with numeric LinkID as fallback
+      try {
+        console.log('Trying level decisions with numeric LinkID');
+        levelDecisions = await getAllLevelDecisions(documentId, linkIdNum);
+        console.log('Level decisions retrieved (fallback):', Object.keys(levelDecisions).length, 'levels');
+      } catch (fallbackError) {
+        console.error('Error in getAllLevelDecisions fallback:', fallbackError.message);
+        // Continue with empty levelDecisions object
+        levelDecisions = {};
+      }
+    }
     
     // ⚡ FIX: Try string first, fallback to number for approvals
-    let allApprovals;
+    let allApprovals = [];
     try {
+      console.log('Fetching approvals with string LinkID');
       allApprovals = await db.DocumentApprovals.findAll({
         where: {
           DocumentID: documentId,
@@ -455,43 +495,76 @@ async function getApprovalStatus(documentId, linkId) {
         },
         order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
       });
-    } catch {
-      allApprovals = await db.DocumentApprovals.findAll({
-        where: {
-          DocumentID: documentId,
-          LinkID: linkIdNum
-        },
-        order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
-      });
+      console.log('Approvals found with string LinkID:', allApprovals.length);
+    } catch (err) {
+      console.error('Error fetching approvals with string LinkID:', err.message);
+      try {
+        console.log('Trying approvals with numeric LinkID');
+        allApprovals = await db.DocumentApprovals.findAll({
+          where: {
+            DocumentID: documentId,
+            LinkID: linkIdNum
+          },
+          order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
+        });
+        console.log('Approvals found with numeric LinkID:', allApprovals.length);
+      } catch (fallbackErr) {
+        console.error('Error fetching approvals in getApprovalStatus fallback:', fallbackErr.message);
+        allApprovals = []; // Default to empty array
+      }
+    }
+    
+    // Ensure allApprovals is an array
+    if (!Array.isArray(allApprovals)) {
+      console.warn('allApprovals is not an array, converting to empty array');
+      allApprovals = [];
     }
 
     // Get approvers for each level
     const levelDetails = {};
-    for (let level = 1; level <= tracking.TotalLevels; level++) {
-      const levelApprovals = allApprovals.filter(a => a.SequenceLevel === level);
-      levelDetails[level] = {
-        level: level,
-        decision: levelDecisions[level] || 'PENDING',
-        approvers: levelApprovals.map(a => ({
-          approverId: a.ApproverID,
-          approverName: a.ApproverName,
-          status: a.Status,
-          isCancelled: a.IsCancelled,
-          approvalDate: a.ApprovalDate
-        }))
-      };
+    const totalLevels = tracking.TotalLevels || 0;
+    
+    console.log('Processing level details for', totalLevels, 'levels');
+    
+    // Only loop if TotalLevels is a valid number
+    if (totalLevels > 0 && Number.isInteger(totalLevels)) {
+      for (let level = 1; level <= totalLevels; level++) {
+        const levelApprovals = allApprovals.filter(a => a && a.SequenceLevel === level);
+        levelDetails[level] = {
+          level: level,
+          decision: levelDecisions[level] || 'PENDING',
+          approvers: levelApprovals.map(a => ({
+            approverId: a.ApproverID || null,
+            approverName: a.ApproverName || null,
+            status: a.Status || 'PENDING',
+            isCancelled: a.IsCancelled || false,
+            approvalDate: a.ApprovalDate || null
+          }))
+        };
+      }
+    } else {
+      console.warn('Invalid totalLevels value:', totalLevels, 'Skipping level details processing');
     }
 
-    return {
+    const result = {
       tracking: tracking,
       levelDetails: levelDetails,
-      currentLevel: tracking.CurrentLevel,
-      totalLevels: tracking.TotalLevels,
-      finalStatus: tracking.FinalStatus,
-      allorMajority: tracking.AllorMajority
+      currentLevel: tracking.CurrentLevel || 0,
+      totalLevels: totalLevels,
+      finalStatus: tracking.FinalStatus || 'PENDING',
+      allorMajority: tracking.AllorMajority || 'MAJORITY'
     };
+    
+    console.log('Returning approval status result');
+    return result;
   } catch (error) {
     console.error('Error getting approval status:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    if (error.original) {
+      console.error('Original error:', error.original);
+    }
     throw error;
   }
 }
