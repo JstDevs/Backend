@@ -7,6 +7,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs').promises; // Using promises-based fs for async operations
+const fsSync = require('fs'); // Using synchronous fs for callbacks
 const ExcelJS = require('exceljs'); // Excel file reading/writing
 const Tesseract = require('tesseract.js'); // OCR engine wrapper
 const { PDFDocument } = require('pdf-lib'); // PDF manipulation (splitting, merging)
@@ -24,7 +25,7 @@ const multer = require('multer');
 // const storage = multer.memoryStorage();
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    fs.mkdir(path.join(__dirname, '../public/uploads/batchupload'),{recursive:true})
+    fsSync.mkdirSync(path.join(__dirname, '../public/uploads/batchupload'), { recursive: true });
     cb(null, path.join(__dirname, '../public/uploads/batchupload'));
   },
   filename: function (req, file, cb) {
@@ -48,7 +49,7 @@ const db =require("../config/database.js"); // Adjust the path to your actual da
 // Example: const db = require('./path/to/your/models/index.js');
 
 async function convertPDFToImage(pdf, outDir) {
- fs.mkdir(outDir, { recursive: true });
+ await fs.mkdir(outDir, { recursive: true });
 
   const options = {
     format: 'png',
@@ -142,27 +143,37 @@ async function ensureDirectoryExists(dirPath) {
 // --- Excel Processing ---
 
 /**
- * Reads data from the first sheet of an Excel file.
- * @param {string} filePath The path to the Excel file.
+ * Reads data from the first sheet of an Excel file or CSV file.
+ * @param {string} filePath The path to the Excel/CSV file.
  * @returns {Promise<Array<object>>} An array of objects, where each object represents a row.
  */
 async function readExcelData(filePath) {
      const workbook = new ExcelJS.Workbook();
      let excelDataTable = [];
+     const fileExt = path.extname(filePath).toLowerCase();
+     const isCsv = fileExt === '.csv';
  
      try {
-         await workbook.xlsx.readFile(filePath);
+         // Read file based on extension
+         if (isCsv) {
+             logger.info(`Reading CSV file: ${filePath}`);
+             await workbook.csv.readFile(filePath);
+         } else {
+             logger.info(`Reading Excel file: ${filePath}`);
+             await workbook.xlsx.readFile(filePath);
+         }
+         
          let worksheet = workbook.getWorksheet('Sheet1');
          if (!worksheet) {
              worksheet = workbook.worksheets?.[0];
          }
          if (!worksheet) {
-             throw new Error('No worksheet found in the Excel file.');
+             throw new Error(`No worksheet found in the ${isCsv ? 'CSV' : 'Excel'} file.`);
          }
 
          const headerRow = worksheet.getRow(1);
          if (!headerRow || headerRow.cellCount === 0) {
-             throw new Error('Excel file is empty or missing header row.');
+             throw new Error(`${isCsv ? 'CSV' : 'Excel'} file is empty or missing header row.`);
          }
 
          const columnCount = worksheet.actualColumnCount || headerRow.cellCount;
@@ -178,7 +189,9 @@ async function readExcelData(filePath) {
              for (let c = 1; c <= columnCount; c++) {
                  const header = headers[c];
                  if (!header) continue;
-                 rowData[header] = row.getCell(c).value;
+                 const cellValue = row.getCell(c).value;
+                 // Handle different value types
+                 rowData[header] = (cellValue !== null && cellValue !== undefined) ? cellValue : '';
              }
              // Only push non-empty rows
              if (Object.keys(rowData).length > 0) {
@@ -186,12 +199,13 @@ async function readExcelData(filePath) {
              }
          });
  
-         logger.info(`Successfully read ${excelDataTable.length} rows from Excel file.`);
+         logger.info(`Successfully read ${excelDataTable.length} rows from ${isCsv ? 'CSV' : 'Excel'} file.`);
          return excelDataTable;
  
      } catch (error) {
-         logger.error(`Error reading Excel file: ${error.message}`);
-         throw error;
+         logger.error(`Error reading ${isCsv ? 'CSV' : 'Excel'} file: ${error.message}`);
+         logger.error(`File path: ${filePath}, Error stack: ${error.stack}`);
+         throw new Error(`Failed to read ${isCsv ? 'CSV' : 'Excel'} file: ${error.message}`);
     }
 }
 
@@ -205,12 +219,127 @@ async function readExcelData(filePath) {
  */
 async function extractZipFile(zipPath, extractDir) {
     try {
+        // Verify file exists
+        try {
+            const stats = await fs.stat(zipPath);
+            if (!stats.isFile()) {
+                throw new Error(`Path is not a file: ${zipPath}`);
+            }
+            if (stats.size === 0) {
+                throw new Error(`ZIP file is empty: ${zipPath}`);
+            }
+            logger.info(`ZIP file verified: ${zipPath} (${stats.size} bytes)`);
+        } catch (statError) {
+            throw new Error(`Cannot access ZIP file: ${statError.message}`);
+        }
+
+        // Create extraction directory
         await fs.mkdir(extractDir, { recursive: true });
-        const zip = new AdmZip(zipPath);
-        zip.extractAllTo(extractDir, true); // Overwrite existing files
-        logger.info(`ZIP file extracted to: ${extractDir}`);
+        
+        // Read and validate ZIP file with retry mechanism
+        let zipBuffer;
+        let retries = 3;
+        let readError = null;
+        
+        while (retries > 0) {
+            try {
+                zipBuffer = await fs.readFile(zipPath);
+                readError = null;
+                break;
+            } catch (err) {
+                readError = err;
+                retries--;
+                if (retries > 0) {
+                    logger.warn(`Failed to read ZIP file, retrying... (${retries} attempts left)`);
+                    await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms before retry
+                }
+            }
+        }
+        
+        if (readError) {
+            throw new Error(`Cannot read ZIP file after retries: ${readError.message}`);
+        }
+
+        // Validate ZIP file signature (first 4 bytes should be PK\x03\x04 or PK\x05\x06 or PK\x07\x08)
+        const signature = zipBuffer.slice(0, 4);
+        const isValidZipStart = signature[0] === 0x50 && signature[1] === 0x4B && 
+                          (signature[2] === 0x03 || signature[2] === 0x05 || signature[2] === 0x07);
+        
+        if (!isValidZipStart) {
+            throw new Error('Invalid ZIP file format. File does not appear to be a valid ZIP archive. Please ensure the file is a properly formatted ZIP file.');
+        }
+
+        // Validate ZIP file end (last bytes should contain end of central directory signature PK\x05\x06)
+        // The end of central directory record is typically in the last 65557 bytes
+        const endSignature = zipBuffer.slice(-22); // Last 22 bytes should contain the end of central directory
+        const hasValidEnd = endSignature.includes(0x50) && endSignature.includes(0x4B) && 
+                           (endSignature.includes(0x05) || endSignature.includes(0x06));
+        
+        if (!hasValidEnd && zipBuffer.length > 22) {
+            // Check a larger range at the end
+            const largerEnd = zipBuffer.slice(-65557);
+            const hasValidEndLarge = largerEnd.includes(Buffer.from([0x50, 0x4B, 0x05, 0x06]));
+            
+            if (!hasValidEndLarge) {
+                logger.warn('ZIP file end signature validation failed, but proceeding with extraction attempt');
+            }
+        }
+        
+        logger.info(`ZIP file buffer read successfully: ${zipBuffer.length} bytes`);
+
+        // Extract ZIP - try multiple methods
+        let zip;
+        let extractionMethod = 'unknown';
+        
+        // Method 1: Try with file path (AdmZip handles file paths well)
+        try {
+            logger.info(`Attempting ZIP extraction using file path method...`);
+            zip = new AdmZip(zipPath);
+            extractionMethod = 'file-path';
+            logger.info(`ZIP initialized successfully using file path method`);
+        } catch (zipPathError) {
+            logger.warn(`File path method failed: ${zipPathError.message}, trying buffer method...`);
+            
+            // Method 2: Try with buffer
+            try {
+                zip = new AdmZip(zipBuffer);
+                extractionMethod = 'buffer';
+                logger.info(`ZIP initialized successfully using buffer method`);
+            } catch (zipBufferError) {
+                logger.error(`Buffer method also failed: ${zipBufferError.message}`);
+                
+                // Method 3: Try reading file again and using buffer
+                try {
+                    logger.info(`Retrying with fresh file read...`);
+                    const freshBuffer = await fs.readFile(zipPath);
+                    zip = new AdmZip(freshBuffer);
+                    extractionMethod = 'fresh-buffer';
+                    logger.info(`ZIP initialized successfully using fresh buffer`);
+                } catch (freshBufferError) {
+                    const errorMsg = `All ZIP extraction methods failed. File may be corrupted, incomplete, or not a valid ZIP archive. ` +
+                                   `File path error: ${zipPathError.message}. ` +
+                                   `Buffer error: ${zipBufferError.message}. ` +
+                                   `Fresh buffer error: ${freshBufferError.message}. ` +
+                                   `File size: ${zipBuffer.length} bytes.`;
+                    logger.error(errorMsg);
+                    throw new Error(errorMsg);
+                }
+            }
+        }
+        
+        try {
+            logger.info(`Extracting ZIP contents using ${extractionMethod} method...`);
+            zip.extractAllTo(extractDir, true); // Overwrite existing files
+            logger.info(`ZIP file extracted successfully to: ${extractDir}`);
+        } catch (extractError) {
+            const errorMsg = `Failed to extract ZIP contents using ${extractionMethod} method: ${extractError.message}. ` +
+                           `The ZIP file may be corrupted, password-protected, or contain invalid entries.`;
+            logger.error(errorMsg);
+            throw new Error(errorMsg);
+        }
     } catch (error) {
         logger.error(`Error extracting ZIP file: ${error.message}`);
+        logger.error(`ZIP path: ${zipPath}, Stack: ${error.stack}`);
         throw new Error(`Failed to extract ZIP file: ${error.message}`);
     }
 }
@@ -480,35 +609,109 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
     // Handle ZIP file extraction
     if (isZipFile) {
         logger.info(`ZIP file detected: ${req.file.originalname}`);
+        logger.info(`Uploaded file path: ${uploadedFilePath}`);
+        logger.info(`File size from multer: ${req.file.size} bytes`);
+        
         try {
+            // Small delay to ensure file is fully written to disk
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Verify uploaded file exists and is accessible with retry
+            let fileStats;
+            let statRetries = 3;
+            while (statRetries > 0) {
+                try {
+                    fileStats = await fs.stat(uploadedFilePath);
+                    if (fileStats.isFile() && fileStats.size > 0) {
+                        break;
+                    }
+                } catch (statErr) {
+                    statRetries--;
+                    if (statRetries === 0) {
+                        logger.error(`Cannot access uploaded file after retries: ${statErr.message}`);
+                        return res.status(400).json({ 
+                            error: `Uploaded file not accessible: ${statErr.message}` 
+                        });
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            
+            logger.info(`File verified: ${fileStats.size} bytes, isFile: ${fileStats.isFile()}`);
+            
+            // Verify file size matches what multer reported
+            if (req.file.size && fileStats.size !== req.file.size) {
+                logger.warn(`File size mismatch: multer reported ${req.file.size} bytes, disk has ${fileStats.size} bytes`);
+                // Wait a bit more and re-check
+                await new Promise(resolve => setTimeout(resolve, 200));
+                const recheckStats = await fs.stat(uploadedFilePath);
+                if (recheckStats.size !== req.file.size) {
+                    logger.error(`File size still mismatched after wait: multer=${req.file.size}, disk=${recheckStats.size}`);
+                    return res.status(400).json({ 
+                        error: `File upload incomplete. Expected ${req.file.size} bytes but got ${recheckStats.size} bytes. Please try uploading again.` 
+                    });
+                }
+            }
+
             // Create temp directory for extraction
             const timestamp = Date.now();
             extractedZipDir = path.join(__dirname, '../temp', `zip_extract_${timestamp}_${uuidv4()}`);
+            logger.info(`Extraction directory: ${extractedZipDir}`);
             
             // Extract ZIP
+            logger.info(`Starting ZIP extraction from: ${uploadedFilePath}`);
             await extractZipFile(uploadedFilePath, extractedZipDir);
+            logger.info(`ZIP extraction completed successfully`);
             
             // Find Excel file in extracted directory
+            logger.info(`Searching for Excel file in extracted directory...`);
             excelFilePath = await findExcelInDirectory(extractedZipDir);
             
             if (!excelFilePath) {
+                logger.warn(`No Excel file found in extracted ZIP archive`);
                 await cleanupTempDirectory(extractedZipDir);
                 return res.status(400).json({ 
                     error: 'No Excel file (.xlsx, .xls, or .csv) found in ZIP archive.' 
                 });
             }
             
+            logger.info(`Excel file found: ${excelFilePath}`);
+            
             // Build file map for matching
+            logger.info(`Building file map for ZIP contents...`);
             fileMap = await buildFileMap(extractedZipDir);
-            logger.info(`ZIP extracted successfully. Excel found: ${excelFilePath}`);
+            logger.info(`ZIP extracted successfully. Excel found: ${excelFilePath}, ${fileMap.size} files mapped`);
             
         } catch (zipError) {
-            logger.error(`ZIP extraction failed: ${zipError.message}`);
+            logger.error(`ZIP extraction/processing failed: ${zipError.message}`);
+            logger.error(`Error type: ${zipError.constructor.name}`);
+            logger.error(`Stack trace: ${zipError.stack}`);
+            console.error('ZIP Error Details:', {
+                message: zipError.message,
+                name: zipError.name,
+                stack: zipError.stack,
+                uploadedFilePath,
+                extractedZipDir
+            });
+            
             if (extractedZipDir) {
-                await cleanupTempDirectory(extractedZipDir);
+                try {
+                    await cleanupTempDirectory(extractedZipDir);
+                } catch (cleanupErr) {
+                    logger.warn(`Failed to cleanup temp directory: ${cleanupErr.message}`);
+                }
             }
-            return res.status(400).json({ 
-                error: `Failed to process ZIP file: ${zipError.message}` 
+            
+            // Return 400 for client errors (bad ZIP file), 500 for server errors
+            const isClientError = zipError.message.includes('Invalid') || 
+                                 zipError.message.includes('corrupted') || 
+                                 zipError.message.includes('incomplete') ||
+                                 zipError.message.includes('end of central directory');
+            
+            return res.status(isClientError ? 400 : 500).json({ 
+                error: `Failed to process ZIP file: ${zipError.message}`,
+                details: zipError.message,
+                errorType: zipError.constructor.name
             });
         }
     } else {
@@ -603,6 +806,22 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
 
                 const linkId = existingDoc ? existingDoc.LinkID : generateLinkID();
 
+                // Helper to determine Active status - default to true (1) unless explicitly set to false/0
+                const getActiveStatus = (value) => {
+                    if (value === undefined || value === null || value === '') {
+                        return true; // Default to active
+                    }
+                    return truthy(value);
+                };
+
+                // Helper to determine publishing_status - default to true (1) unless explicitly set to false/0
+                const getPublishingStatus = (value) => {
+                    if (value === undefined || value === null || value === '') {
+                        return true; // Default to published
+                    }
+                    return truthy(value);
+                };
+
                 const documentData = {
                     LinkID: linkId,
                     FileName: fileName,
@@ -612,8 +831,8 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                     Confidential: truthy(rowData['Confidential']),
                     FileDescription: get(rowData, 'File Description', 'FileDescription') || '',
                     Description: get(rowData, 'Description') || '',
-                    publishing_status: truthy(get(rowData, 'publishing_status', 'Publishing Status')), 
-                    Active: rowData['Active'] !== undefined ? truthy(rowData['Active']) : true,
+                    publishing_status: getPublishingStatus(get(rowData, 'publishing_status', 'Publishing Status')), 
+                    Active: getActiveStatus(rowData['Active']),
                     Remarks: rowData['Remarks'] || '',
                     Createdby: rowData['Created By'] || 'System',
                     CreatedDate: new Date(serverDate),
@@ -952,7 +1171,11 @@ router.post('/processexcelsheet',upload.single('batchupload'), async (req, res) 
                         logger.warn(`No OCR data to update for ${fileName}.`);
                         documentStatus += ' (OCR data not updated)';
                     }
-                    fs.rmdir(outputDir, { recursive: true })
+                    try {
+                        await fs.rm(outputDir, { recursive: true, force: true });
+                    } catch (cleanupErr) {
+                        logger.warn(`Failed to cleanup output directory ${outputDir}: ${cleanupErr.message}`);
+                    }
                 } else {
                     documentStatus += ' (PDF not found)';
                 }
