@@ -48,7 +48,7 @@ async function convertPdfBufferToImages(pdfBuffer, outputFolder) {
   // //console.log("file",filename,"path",outputFolder+`/${filename}`)
   const buffer= fs.readFileSync(outputFolder+`/${filename}`);
   // fs.unlinkSync(tempPath); // optional cleanup
-  console.log("we's converting them files to imageries and is a ", filename, " - bing bang boom!")
+  // console.log("we's converting them files to imageries and is a ", filename, " - bing bang boom!")
   console.log("filename",filename,"buffer",buffer)
   return {
     file:filename,
@@ -73,6 +73,7 @@ async function convertPdfBufferToMainFile(pdfBuffer, outputFolder) {
   const buffer = fs.readFileSync(filePath);
 
   console.log("PDF saved without conversion:", filename);
+  
 
   // Return both filename and buffer
   return {
@@ -115,4 +116,5 @@ async function convertPdfBufferToMainFile(pdfBuffer, outputFolder) {
 // }
 
 
-module.exports=convertPdfBufferToImages
+// module.exports=convertPdfBufferToMainFile;
+module.exports=convertPdfBufferToImages;

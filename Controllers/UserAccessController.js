@@ -291,15 +291,32 @@ router.delete('/:userid', requireAuth, async (req, res) => {
     try {
         const { userid } = req.params;
 
+        const accessUsed = await db.UserUserAccess.findOne({
+            where: {UserAccessID: userid}
+        })
+
+        if (accessUsed) {
+            console.log('Text 000')
+            return res.json({
+                success: false,
+                inUse: true,
+                message: 'Access is currently in use ! ! !'
+            })
+        }
+
+        console.log('Text 1')
+
         // Find the user access record
         const userAccess = await db.UserAccess.findByPk(userid);
-        
+            
         if (!userAccess) {
+            console.log('Text 12')
             return res.status(404).json({
                 success: false,
                 message: 'User Access not found'
             });
         }
+        console.log('Text 123')
 
         // Soft-delete: mark module access entries and the user access record inactive
         await db.ModuleAccess.update(
