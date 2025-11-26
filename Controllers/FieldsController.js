@@ -16,9 +16,26 @@ router.get('/by-link/:id', async (req, res) => {
     }
     const fields = await db.Fields.findAll({
       where,
+      include: [{
+        model: db.OCRavalibleFields,
+        attributes: ['ID', 'Field'],
+        required: false,  // LEFT JOIN - allow fields without master link
+        as: 'MasterField'
+      }],
       order: [['FieldNumber', 'ASC']]
     });
-    res.json({ status: true, data: fields });
+    
+    // Map response to include FieldID and MasterField clearly
+    const mappedFields = fields.map(f => {
+      const fieldData = f.toJSON();
+      return {
+        ...fieldData,
+        FieldID: fieldData.FieldID || fieldData.MasterField?.ID || null,
+        MasterField: fieldData.MasterField?.Field || null
+      };
+    });
+    
+    res.json({ status: true, data: mappedFields });
   } catch (error) {
     console.error('Error fetching fields by link:', error);
     res.status(500).json({ status: false, error: 'Failed to fetch fields by link' });
@@ -38,9 +55,26 @@ router.get('/by-link', async (req, res) => {
     }
     const fields = await db.Fields.findAll({
       where,
+      include: [{
+        model: db.OCRavalibleFields,
+        attributes: ['ID', 'Field'],
+        required: false,  // LEFT JOIN - allow fields without master link
+        as: 'MasterField'
+      }],
       order: [['FieldNumber', 'ASC']]
     });
-    res.json({ status: true, data: fields });
+    
+    // Map response to include FieldID and MasterField clearly
+    const mappedFields = fields.map(f => {
+      const fieldData = f.toJSON();
+      return {
+        ...fieldData,
+        FieldID: fieldData.FieldID || fieldData.MasterField?.ID || null,
+        MasterField: fieldData.MasterField?.Field || null
+      };
+    });
+    
+    res.json({ status: true, data: mappedFields });
   } catch (error) {
     console.error('Error fetching fields by link (query):', error);
     res.status(500).json({ status: false, error: 'Failed to fetch fields by link' });
@@ -49,7 +83,7 @@ router.get('/by-link', async (req, res) => {
 
 // BULK UPSERT fields by LinkID
 // PUT /fields/by-link/:id
-// Body: { fields: [{ FieldNumber, Active, Description, DataType }, ...], deactivateMissing?: boolean }
+// Body: { fields: [{ FieldNumber, Active, Description, DataType, FieldID }, ...], deactivateMissing?: boolean }
 router.put('/by-link/:id', async (req, res) => {
   const transaction = await db.sequelize.transaction();
   try {
@@ -63,10 +97,20 @@ router.put('/by-link/:id', async (req, res) => {
 
     // Normalize and validate items
     const normalized = fields.map(item => {
+      // Handle FieldID: convert to number if valid, otherwise null
+      let fieldID = null;
+      if (item.FieldID !== undefined && item.FieldID !== null && item.FieldID !== '') {
+        const parsedID = Number(item.FieldID);
+        if (Number.isFinite(parsedID) && parsedID > 0) {
+          fieldID = parsedID;
+        }
+      }
+      
       return {
         LinkID: Number(id),
         FieldNumber: Number(item.FieldNumber),
         Active: item.Active === true || item.Active === 1 || item.Active === '1' || item.Active === 'true',
+        FieldID: fieldID,  // Accept FieldID from payload (nullable)
         Description: typeof item.Description === 'string' ? item.Description : null,
         DataType: item.DataType === 'Date' ? 'Date' : 'Text' // default to Text
       };
@@ -90,9 +134,31 @@ router.put('/by-link/:id', async (req, res) => {
     for (const item of normalized) {
       const existing = await db.Fields.findOne({ where: { LinkID: item.LinkID, FieldNumber: item.FieldNumber }, transaction });
       if (existing) {
-        await existing.update({ Active: item.Active, Description: item.Description, DataType: item.DataType }, { transaction });
+        // Build update object, only include FieldID if it has a value
+        const updateData = {
+          Active: item.Active, 
+          Description: item.Description, 
+          DataType: item.DataType
+        };
+        // Only include FieldID if it's not null
+        if (item.FieldID !== null && item.FieldID !== undefined) {
+          updateData.FieldID = item.FieldID;
+        }
+        await existing.update(updateData, { transaction });
       } else {
-        await db.Fields.create(item, { transaction });
+        // Build create object, exclude FieldID if it's null
+        const createData = {
+          LinkID: item.LinkID,
+          FieldNumber: item.FieldNumber,
+          Active: item.Active,
+          Description: item.Description,
+          DataType: item.DataType
+        };
+        // Only include FieldID if it has a value (database doesn't allow NULL)
+        if (item.FieldID !== null && item.FieldID !== undefined) {
+          createData.FieldID = item.FieldID;
+        }
+        await db.Fields.create(createData, { transaction });
       }
     }
 
@@ -107,8 +173,16 @@ router.put('/by-link/:id', async (req, res) => {
     return res.json({ status: true, data: updated });
   } catch (error) {
     console.error('Error updating fields by link:', error);
-    try { await transaction.rollback(); } catch (_) {}
-    return res.status(500).json({ status: false, error: 'Failed to update fields by link' });
+    console.error('Error details:', error.message);
+    console.error('Error stack:', error.stack);
+    try { await transaction.rollback(); } catch (rollbackError) {
+      console.error('Rollback error:', rollbackError);
+    }
+    return res.status(500).json({ 
+      status: false, 
+      error: 'Failed to update fields by link',
+      details: error.message 
+    });
   }
 });
 

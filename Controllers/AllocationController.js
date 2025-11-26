@@ -1033,9 +1033,26 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
         const { linkId } = req.params;
         const fields = await Fields.findAll({
             where: { LinkID: linkId },
+            include: [{
+                model: db.OCRavalibleFields,
+                attributes: ['ID', 'Field'],
+                required: false,  // LEFT JOIN - allow fields without master link
+                as: 'MasterField'
+            }],
             order: [['FieldNumber', 'ASC']]
         });
-        return res.json({ status: true, data: fields });
+        
+        // Map response to include FieldID and MasterField clearly
+        const mappedFields = fields.map(f => {
+            const fieldData = f.toJSON();
+            return {
+                ...fieldData,
+                FieldID: fieldData.FieldID || fieldData.MasterField?.ID || null,
+                MasterField: fieldData.MasterField?.Field || null
+            };
+        });
+        
+        return res.json({ status: true, data: mappedFields });
     } catch (error) {
         console.error('Error fetching available fields:', error);
         return res.status(500).json({ status: false, error: 'Failed to fetch available fields' });

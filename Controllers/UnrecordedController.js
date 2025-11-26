@@ -606,15 +606,41 @@ router.post('/fields', async (req, res) => {
 
 // PUT (update) a field by ID
 router.put('/fields/:id', async (req, res) => {
+  const transaction = await db.sequelize.transaction();
   try {
     const { Field } = req.body;
-    const field = await db.OCRavalibleFields.findByPk(req.params.id);
-    if (!field) return res.status(404).json({ error: 'Field not found' });
+    const field = await db.OCRavalibleFields.findByPk(req.params.id, { transaction });
+    if (!field) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'Field not found' });
+    }
 
-    field.Field = Field || field.Field;
-    await field.save();
+    // Store old field name for cascade update
+    const oldFieldName = field.Field;
+    const newFieldName = Field || field.Field;
+
+    // Update master table
+    field.Field = newFieldName;
+    await field.save({ transaction });
+
+    // Cascade update: Update Fields.Description where FieldID matches
+    // Only update if Description matches old master name (preserves custom names)
+    await db.Fields.update(
+      { Description: newFieldName },
+      {
+        where: {
+          FieldID: req.params.id,
+          Description: oldFieldName  // Only update if it matches old master name
+        },
+        transaction
+      }
+    );
+
+    await transaction.commit();
     res.json(field);
   } catch (error) {
+    await transaction.rollback();
+    console.error('Error updating field:', error);
     res.status(500).json({ error: 'Failed to update field' });
   }
 });

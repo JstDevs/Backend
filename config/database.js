@@ -117,6 +117,15 @@ Object.keys(db).forEach(key => {
   }
 });
 
+// Define association between Fields and OCRavalibleFields
+if (db.Fields && db.OCRavalibleFields) {
+  db.Fields.belongsTo(db.OCRavalibleFields, {
+    foreignKey: 'FieldID',
+    targetKey: 'ID',
+    as: 'MasterField'
+  });
+}
+
 db.sequelize = sequelize;
 db.Sequelize = Sequelize;
 

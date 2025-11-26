@@ -15,6 +15,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull: false
     },
+    FieldID: {
+      type: DataTypes.BIGINT,
+      allowNull: true
+      // Foreign key relationship is defined in database.js associations
+    },
     Description: {
       type: DataTypes.STRING,
       allowNull: true
