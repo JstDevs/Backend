@@ -29,9 +29,15 @@ router.post("/create", requireAuth, async (req, res) => {
       : undefined;
 
     if (!DepartmentId || !subDepID) {
+      console.error("❌ Missing required fields. Request body:", JSON.stringify(req.body, null, 2));
       return res.status(400).json({
         status: false,
-        message: "DepartmentId and subDepID are required."
+        message: "DepartmentId and subDepID are required.",
+        received: {
+          DepartmentId: DepartmentIdRaw,
+          subDepID: subDepIDRaw,
+          body: req.body
+        }
       });
     }
 
@@ -130,7 +136,7 @@ router.get("/list", requireAuth, async (req, res) => {
   }
 });
 
-// ✅ Update Approval Matrix
+// ✅ Update Approval Matrix (by /update/:id)
 router.put("/update/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -167,6 +173,56 @@ router.put("/update/:id", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("❌ Error updating approvalmatrix:", err);
     return res.status(500).json({
+      message: "Failed to update approvalmatrix",
+      error: err.message
+    });
+  }
+});
+
+// ✅ Update Approval Matrix (by /:id) - for frontend compatibility
+router.put("/:id", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      DepartmentId,
+      subDepID,
+      subDepartmentId,
+      AllorMajority,
+      NumberofApprover,
+      NumberOfApprover,
+      Active
+    } = req.body;
+
+    const matrix = await approvalmatrix.findByPk(id);
+    if (!matrix) {
+      return res.status(404).json({
+        status: false,
+        message: "Approval Matrix record not found ❌"
+      });
+    }
+
+    const updateData = {};
+    if (DepartmentId !== undefined) updateData.DepartmentId = DepartmentId;
+    if (subDepID !== undefined) updateData.subDepID = subDepID;
+    if (subDepartmentId !== undefined) updateData.subDepID = subDepartmentId;
+    if (AllorMajority !== undefined) updateData.AllorMajority = AllorMajority;
+    if (NumberofApprover !== undefined) updateData.NumberofApprover = NumberofApprover;
+    if (NumberOfApprover !== undefined) updateData.NumberofApprover = NumberOfApprover;
+    if (Active !== undefined) updateData.Active = Active;
+    updateData.AlteredBy = req.user.id || req.user.userName;
+    updateData.AlteredDate = new Date();
+
+    await matrix.update(updateData);
+
+    return res.json({
+      status: true,
+      message: "Approval Matrix updated successfully ✅",
+      data: matrix
+    });
+  } catch (err) {
+    console.error("❌ Error updating approvalmatrix:", err);
+    return res.status(500).json({
+      status: false,
       message: "Failed to update approvalmatrix",
       error: err.message
     });
