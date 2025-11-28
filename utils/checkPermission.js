@@ -4,6 +4,8 @@
 const db = require('../config/database');
 const AssignSubDepartment = db.AssignSubDepartment;
 const DocumentAccess = db.DocumentAccess;
+const RoleDocumentAccess = db.RoleDocumentAccess;
+const UserUserAccess = db.UserUserAccess;
 
 /**
  * Check if a user has a specific permission for a department and subdepartment
@@ -84,8 +86,7 @@ async function checkUserPermission(userId, departmentId, subDepartmentId, permis
         
         console.log(`[checkUserPermission] Found AssignSubDepartment record with LinkID: ${linkID} (type: ${typeof linkID})`);
         
-        // Fetch user permissions for this LinkID and UserID
-        // Try both string and number LinkID
+        // STEP 1: Check for user-specific override in DocumentAccess (takes precedence)
         let userPermissions = await DocumentAccess.findOne({
             where: { 
                 LinkID: linkIDStr, 
@@ -95,7 +96,6 @@ async function checkUserPermission(userId, departmentId, subDepartmentId, permis
         });
         
         if (!userPermissions) {
-            console.log(`[checkUserPermission] Trying numeric LinkID: ${linkIDNum}`);
             userPermissions = await DocumentAccess.findOne({
                 where: { 
                     LinkID: linkIDNum, 
@@ -105,58 +105,90 @@ async function checkUserPermission(userId, departmentId, subDepartmentId, permis
             });
         }
         
-        if (!userPermissions) {
-            console.log(`[checkUserPermission] Permission Check Failed: No DocumentAccess record found for User ${userIdInt}, LinkID ${linkID} (tried both string and number)`);
-            // Check if DocumentAccess exists for this LinkID at all
-            const anyAccess = await DocumentAccess.findOne({
-                where: { 
-                    LinkID: linkIDStr,
-                    Active: true 
-                },
-                limit: 1
-            });
-            if (anyAccess) {
-                console.log(`[checkUserPermission] Found DocumentAccess records for LinkID ${linkID}, but not for User ${userIdInt}`);
-            } else {
-                const anyAccessNum = await DocumentAccess.findOne({
+        // If user has specific override, use it
+        if (userPermissions) {
+            console.log(`[checkUserPermission] Found user-specific DocumentAccess override for User ${userIdInt}`);
+            const permissionValue = userPermissions[permissionType];
+            const hasPermission = permissionValue === true || permissionValue === 1;
+            console.log(`[checkUserPermission] Permission '${permissionType}' from user override: ${hasPermission}`);
+            return hasPermission;
+        }
+        
+        // STEP 2: Check role-based permissions
+        // Get user's roles
+        const userRoles = await UserUserAccess.findAll({
+            where: { UserID: userIdInt }
+        });
+        
+        if (!userRoles || userRoles.length === 0) {
+            console.log(`[checkUserPermission] No roles found for User ${userIdInt}, checking userAccessArray...`);
+            // Try to get from userAccessArray if available
+            const user = await db.Users.findOne({ where: { ID: userIdInt } });
+            if (user && user.userAccessArray && Array.isArray(user.userAccessArray) && user.userAccessArray.length > 0) {
+                // Use userAccessArray to check roles
+                const roleIds = user.userAccessArray;
+                const rolePermissions = await RoleDocumentAccess.findAll({
                     where: { 
-                        LinkID: linkIDNum,
+                        LinkID: linkIDStr,
+                        UserAccessID: { [db.Sequelize.Op.in]: roleIds },
                         Active: true 
-                    },
-                    limit: 1
+                    }
                 });
-                if (anyAccessNum) {
-                    console.log(`[checkUserPermission] Found DocumentAccess records for LinkID ${linkIDNum} (numeric), but not for User ${userIdInt}`);
-                } else {
-                    console.log(`[checkUserPermission] No DocumentAccess records found for LinkID ${linkID} at all`);
+                
+                if (rolePermissions.length > 0) {
+                    // Check if any role has the permission
+                    const hasPermission = rolePermissions.some(rp => rp[permissionType] === true || rp[permissionType] === 1);
+                    console.log(`[checkUserPermission] Permission '${permissionType}' from roles (userAccessArray): ${hasPermission}`);
+                    return hasPermission;
                 }
             }
+            console.log(`[checkUserPermission] Permission Check Failed: No roles found for User ${userIdInt}`);
             return false;
         }
         
-        console.log(`[checkUserPermission] Found DocumentAccess record for User ${userIdInt}`);
+        const roleIds = userRoles.map(ur => ur.UserAccessID);
+        console.log(`[checkUserPermission] Found ${roleIds.length} roles for User ${userIdInt}:`, roleIds);
         
-        // Check the specific permission
-        const permissionValue = userPermissions[permissionType];
-        const hasPermission = permissionValue === true || permissionValue === 1;
+        // Get role-based permissions for this LinkID
+        let rolePermissions = await RoleDocumentAccess.findAll({
+            where: { 
+                LinkID: linkIDStr,
+                UserAccessID: { [db.Sequelize.Op.in]: roleIds },
+                Active: true 
+            }
+        });
         
-        console.log(`[checkUserPermission] Permission '${permissionType}' value: ${permissionValue} (type: ${typeof permissionValue}), hasPermission: ${hasPermission}`);
+        if (rolePermissions.length === 0) {
+            // Try numeric LinkID
+            rolePermissions = await RoleDocumentAccess.findAll({
+                where: { 
+                    LinkID: linkIDNum,
+                    UserAccessID: { [db.Sequelize.Op.in]: roleIds },
+                    Active: true 
+                }
+            });
+        }
+        
+        if (rolePermissions.length === 0) {
+            console.log(`[checkUserPermission] Permission Check Failed: No RoleDocumentAccess found for User ${userIdInt} roles, LinkID ${linkID}`);
+            return false;
+        }
+        
+        console.log(`[checkUserPermission] Found ${rolePermissions.length} role-based permissions for User ${userIdInt}`);
+        
+        // Check if any role has the permission (OR logic - if any role grants it, user has it)
+        const hasPermission = rolePermissions.some(rp => rp[permissionType] === true || rp[permissionType] === 1);
+        
+        console.log(`[checkUserPermission] Permission '${permissionType}' from roles: ${hasPermission}`);
         
         if (!hasPermission) {
-            console.log(`[checkUserPermission] Permission Check Failed: User ${userIdInt} does not have '${permissionType}' permission. Value: ${permissionValue}`);
-            // Log all permissions for debugging
-            console.log(`[checkUserPermission] All permissions for this user:`, {
-                View: userPermissions.View,
-                Add: userPermissions.Add,
-                Edit: userPermissions.Edit,
-                Delete: userPermissions.Delete,
-                Print: userPermissions.Print,
-                Confidential: userPermissions.Confidential,
-                Comment: userPermissions.Comment,
-                Collaborate: userPermissions.Collaborate,
-                Finalize: userPermissions.Finalize,
-                Masking: userPermissions.Masking
-            });
+            console.log(`[checkUserPermission] Permission Check Failed: User ${userIdInt} does not have '${permissionType}' permission from any role.`);
+            // Log role permissions for debugging
+            const rolePermsSummary = rolePermissions.map(rp => ({
+                UserAccessID: rp.UserAccessID,
+                [permissionType]: rp[permissionType]
+            }));
+            console.log(`[checkUserPermission] Role permissions checked:`, rolePermsSummary);
         }
         
         return hasPermission;
@@ -185,7 +217,6 @@ async function getUserPermissions(userId, departmentId, subDepartmentId) {
             where: { 
                 DepartmentID: departmentId, 
                 SubDepartmentID: subDepartmentId, 
-                UserID: userId,
                 Active: true 
             }
         });
@@ -195,32 +226,121 @@ async function getUserPermissions(userId, departmentId, subDepartmentId) {
         }
         
         const linkID = assignedSubDep.LinkID;
+        const linkIDStr = String(linkID);
+        const linkIDNum = parseInt(linkID) || linkIDStr;
         
-        // Fetch user permissions for this LinkID and UserID
-        const userPermissions = await DocumentAccess.findOne({
+        // STEP 1: Check for user-specific override (takes precedence)
+        let userPermissions = await DocumentAccess.findOne({
             where: { 
-                LinkID: linkID, 
+                LinkID: linkIDStr, 
                 UserID: userId,
                 Active: true 
             }
         });
         
         if (!userPermissions) {
+            userPermissions = await DocumentAccess.findOne({
+                where: { 
+                    LinkID: linkIDNum, 
+                    UserID: userId,
+                    Active: true 
+                }
+            });
+        }
+        
+        // If user has specific override, return it
+        if (userPermissions) {
+            return {
+                View: userPermissions.View || false,
+                Add: userPermissions.Add || false,
+                Edit: userPermissions.Edit || false,
+                Delete: userPermissions.Delete || false,
+                Print: userPermissions.Print || false,
+                Confidential: userPermissions.Confidential || false,
+                Comment: userPermissions.Comment || false,
+                Collaborate: userPermissions.Collaborate || false,
+                Finalize: userPermissions.Finalize || false,
+                Masking: userPermissions.Masking || false,
+                source: 'user-override'
+            };
+        }
+        
+        // STEP 2: Get role-based permissions
+        const userRoles = await UserUserAccess.findAll({
+            where: { UserID: userId }
+        });
+        
+        if (!userRoles || userRoles.length === 0) {
+            // Try userAccessArray
+            const user = await db.Users.findOne({ where: { ID: userId } });
+            if (user && user.userAccessArray && Array.isArray(user.userAccessArray) && user.userAccessArray.length > 0) {
+                const roleIds = user.userAccessArray;
+                const rolePermissions = await RoleDocumentAccess.findAll({
+                    where: { 
+                        LinkID: linkIDStr,
+                        UserAccessID: { [db.Sequelize.Op.in]: roleIds },
+                        Active: true 
+                    }
+                });
+                
+                if (rolePermissions.length > 0) {
+                    // Merge permissions from all roles (OR logic - if any role grants it, user has it)
+                    const merged = {
+                        View: rolePermissions.some(rp => rp.View === true || rp.View === 1),
+                        Add: rolePermissions.some(rp => rp.Add === true || rp.Add === 1),
+                        Edit: rolePermissions.some(rp => rp.Edit === true || rp.Edit === 1),
+                        Delete: rolePermissions.some(rp => rp.Delete === true || rp.Delete === 1),
+                        Print: rolePermissions.some(rp => rp.Print === true || rp.Print === 1),
+                        Confidential: rolePermissions.some(rp => rp.Confidential === true || rp.Confidential === 1),
+                        Comment: rolePermissions.some(rp => rp.Comment === true || rp.Comment === 1),
+                        Collaborate: rolePermissions.some(rp => rp.Collaborate === true || rp.Collaborate === 1),
+                        Finalize: rolePermissions.some(rp => rp.Finalize === true || rp.Finalize === 1),
+                        Masking: rolePermissions.some(rp => rp.Masking === true || rp.Masking === 1),
+                        source: 'role-based'
+                    };
+                    return merged;
+                }
+            }
             return null;
         }
         
-        // Return formatted permissions
+        const roleIds = userRoles.map(ur => ur.UserAccessID);
+        
+        let rolePermissions = await RoleDocumentAccess.findAll({
+            where: { 
+                LinkID: linkIDStr,
+                UserAccessID: { [db.Sequelize.Op.in]: roleIds },
+                Active: true 
+            }
+        });
+        
+        if (rolePermissions.length === 0) {
+            rolePermissions = await RoleDocumentAccess.findAll({
+                where: { 
+                    LinkID: linkIDNum,
+                    UserAccessID: { [db.Sequelize.Op.in]: roleIds },
+                    Active: true 
+                }
+            });
+        }
+        
+        if (rolePermissions.length === 0) {
+            return null;
+        }
+        
+        // Merge permissions from all roles (OR logic)
         return {
-            View: userPermissions.View || false,
-            Add: userPermissions.Add || false,
-            Edit: userPermissions.Edit || false,
-            Delete: userPermissions.Delete || false,
-            Print: userPermissions.Print || false,
-            Confidential: userPermissions.Confidential || false,
-            Comment: userPermissions.Comment || false,
-            Collaborate: userPermissions.Collaborate || false,
-            Finalize: userPermissions.Finalize || false,
-            Masking: userPermissions.Masking || false
+            View: rolePermissions.some(rp => rp.View === true || rp.View === 1),
+            Add: rolePermissions.some(rp => rp.Add === true || rp.Add === 1),
+            Edit: rolePermissions.some(rp => rp.Edit === true || rp.Edit === 1),
+            Delete: rolePermissions.some(rp => rp.Delete === true || rp.Delete === 1),
+            Print: rolePermissions.some(rp => rp.Print === true || rp.Print === 1),
+            Confidential: rolePermissions.some(rp => rp.Confidential === true || rp.Confidential === 1),
+            Comment: rolePermissions.some(rp => rp.Comment === true || rp.Comment === 1),
+            Collaborate: rolePermissions.some(rp => rp.Collaborate === true || rp.Collaborate === 1),
+            Finalize: rolePermissions.some(rp => rp.Finalize === true || rp.Finalize === 1),
+            Masking: rolePermissions.some(rp => rp.Masking === true || rp.Masking === 1),
+            source: 'role-based'
         };
         
     } catch (error) {

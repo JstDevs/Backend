@@ -14,6 +14,8 @@ const AssignSubdepartment=db.AssignSubDepartment;
 const Fields=db.Fields;
 const Users=db.Users;
 const DocumentAccess=db.DocumentAccess;
+const RoleDocumentAccess=db.RoleDocumentAccess;
+const UserAccess=db.UserAccess;
 // Helper function to get session username
 const getSessionUsername = (req) => {
     return req.user.userName || null;
@@ -1459,6 +1461,528 @@ router.put('/update/:id', async (req, res) => {
     } catch (error) {
         console.error('Error updating allocation:', error);
         return res.status(500).json({ status: false, error: 'Failed to update allocation', details: error.message });
+    }
+});
+
+// ==================== ROLE-BASED ALLOCATION ENDPOINTS ====================
+
+// GET /allocation/role-allocations - Get all role allocations for a department and subdepartment
+router.get('/role-allocations', requireAuth, async (req, res) => {
+    try {
+        // Check if model is loaded
+        if (!RoleDocumentAccess) {
+            return res.status(500).json({ 
+                status: false, 
+                error: 'RoleDocumentAccess model not loaded. Please check database configuration.' 
+            });
+        }
+
+        console.log('[role-allocations] Model check passed, RoleDocumentAccess:', typeof RoleDocumentAccess);
+        
+        const { departmentId, subDepartmentId } = req.query;
+        console.log('[role-allocations] Request params:', { departmentId, subDepartmentId });
+        
+        if (!departmentId || !subDepartmentId) {
+            return res.status(400).json({ 
+                status: false, 
+                error: 'Missing required parameters: departmentId and subDepartmentId' 
+            });
+        }
+
+        // Find assigned subdepartment to get LinkID
+        const assignedSubDep = await AssignSubdepartment.findOne({
+            where: { 
+                DepartmentID: departmentId, 
+                SubDepartmentID: subDepartmentId, 
+                Active: true 
+            }
+        });
+
+        if (!assignedSubDep) {
+            return res.json({ status: true, data: [] });
+        }
+
+        const linkID = assignedSubDep.LinkID;
+        const linkIDStr = String(linkID); // Ensure it's a string
+        
+        console.log('[role-allocations] Found LinkID:', linkID, 'as string:', linkIDStr);
+
+        // Get all role allocations for this LinkID
+        // Try with include first, if it fails, try without include
+        let roleAllocations;
+        try {
+            console.log('[role-allocations] Attempting query with include...');
+            roleAllocations = await RoleDocumentAccess.findAll({
+                where: { 
+                    LinkID: linkIDStr,
+                    Active: true 
+                },
+                attributes: {
+                    exclude: ['id'] // Explicitly exclude 'id' column
+                },
+                include: [{
+                    model: UserAccess,
+                    attributes: ['ID', 'Description', 'Active'],
+                    as: 'userAccess',
+                    required: false // LEFT JOIN instead of INNER JOIN
+                }],
+                order: [['CreatedDate', 'DESC']]
+            });
+            console.log('[role-allocations] Query successful, found', roleAllocations.length, 'records');
+        } catch (includeError) {
+            console.warn('[role-allocations] Error with include, trying without:', includeError.message);
+            console.warn('[role-allocations] Error details:', includeError);
+            // Fallback: get without include and manually add UserAccess data
+            roleAllocations = await RoleDocumentAccess.findAll({
+                where: { 
+                    LinkID: linkIDStr,
+                    Active: true 
+                },
+                attributes: {
+                    exclude: ['id'] // Explicitly exclude 'id' column
+                },
+                order: [['CreatedDate', 'DESC']]
+            });
+            
+            console.log('[role-allocations] Fallback query successful, found', roleAllocations.length, 'records');
+            
+            // Manually fetch UserAccess for each role
+            for (let allocation of roleAllocations) {
+                try {
+                    const userAccess = await UserAccess.findByPk(allocation.UserAccessID, {
+                        attributes: ['ID', 'Description', 'Active']
+                    });
+                    allocation.dataValues.userAccess = userAccess;
+                } catch (userAccessError) {
+                    console.warn('[role-allocations] Error fetching UserAccess for ID', allocation.UserAccessID, ':', userAccessError.message);
+                    allocation.dataValues.userAccess = null;
+                }
+            }
+        }
+
+        return res.json({ status: true, data: roleAllocations });
+    } catch (error) {
+        console.error('Error fetching role allocations:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error name:', error.name);
+        
+        // Check if table doesn't exist
+        if (error.message && (
+            error.message.includes("doesn't exist") || 
+            error.message.includes("Table") && error.message.includes("doesn't exist") ||
+            error.message.includes("Unknown table") ||
+            error.original && error.original.code === 'ER_NO_SUCH_TABLE'
+        )) {
+            return res.status(500).json({ 
+                status: false, 
+                error: 'RoleDocumentAccess table does not exist in database',
+                details: 'Please run the SQL migration file: migrations/create_role_document_access_table.sql',
+                hint: 'The table needs to be created before using role-based allocations'
+            });
+        }
+        
+        return res.status(500).json({ 
+            status: false, 
+            error: 'Failed to fetch role allocations', 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// GET /allocation/role-allocations/:linkId - Get role allocations by LinkID
+router.get('/role-allocations/:linkId', requireAuth, async (req, res) => {
+    try {
+        // Check if model is loaded
+        if (!RoleDocumentAccess) {
+            return res.status(500).json({ 
+                status: false, 
+                error: 'RoleDocumentAccess model not loaded. Please check database configuration.' 
+            });
+        }
+
+        const { linkId } = req.params;
+        const { includeInactive } = req.query;
+
+        const linkIdStr = String(linkId); // Ensure it's a string
+        const where = { LinkID: linkIdStr };
+        if (includeInactive !== 'true') {
+            where.Active = true;
+        }
+
+        // Try with include first, if it fails, try without include
+        let roleAllocations;
+        try {
+            roleAllocations = await RoleDocumentAccess.findAll({
+                where,
+                attributes: {
+                    exclude: ['id'] // Explicitly exclude 'id' column
+                },
+                include: [{
+                    model: UserAccess,
+                    attributes: ['ID', 'Description', 'Active'],
+                    as: 'userAccess',
+                    required: false // LEFT JOIN instead of INNER JOIN
+                }],
+                order: [['CreatedDate', 'DESC']]
+            });
+        } catch (includeError) {
+            console.warn('Error with include, trying without:', includeError.message);
+            // Fallback: get without include and manually add UserAccess data
+            roleAllocations = await RoleDocumentAccess.findAll({
+                where,
+                attributes: {
+                    exclude: ['id'] // Explicitly exclude 'id' column
+                },
+                order: [['CreatedDate', 'DESC']]
+            });
+            
+            // Manually fetch UserAccess for each role
+            for (let allocation of roleAllocations) {
+                const userAccess = await UserAccess.findByPk(allocation.UserAccessID, {
+                    attributes: ['ID', 'Description', 'Active']
+                });
+                allocation.dataValues.userAccess = userAccess;
+            }
+        }
+
+        return res.json({ status: true, data: roleAllocations });
+    } catch (error) {
+        console.error('Error fetching role allocations by link:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error name:', error.name);
+        
+        // Check if table doesn't exist
+        if (error.message && (
+            error.message.includes("doesn't exist") || 
+            error.message.includes("Table") && error.message.includes("doesn't exist") ||
+            error.message.includes("Unknown table") ||
+            error.original && error.original.code === 'ER_NO_SUCH_TABLE'
+        )) {
+            return res.status(500).json({ 
+                status: false, 
+                error: 'RoleDocumentAccess table does not exist in database',
+                details: 'Please run the SQL migration file: migrations/create_role_document_access_table.sql',
+                hint: 'The table needs to be created before using role-based allocations'
+            });
+        }
+        
+        return res.status(500).json({ 
+            status: false, 
+            error: 'Failed to fetch role allocations', 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// GET /allocation/add-role - Get form data for adding role allocation
+router.get('/add-role', requireAuth, async (req, res) => {
+    try {
+        const { linkid, subdepid, depid, useraccessid = 0 } = req.query;
+
+        if (!linkid || !subdepid || !depid) {
+            return res.status(400).json({ 
+                status: false, 
+                error: 'Missing required parameters: linkid, subdepid, depid' 
+            });
+        }
+
+        // Get all active user access (roles)
+        const userAccessList = await UserAccess.findAll({ 
+            where: { Active: true },
+            order: [['Description', 'ASC']]
+        });
+
+        // Get existing role allocations for this LinkID
+        const existingRoleAllocations = await RoleDocumentAccess.findAll({
+            where: { LinkID: linkid, Active: true },
+            attributes: { exclude: ['id'] }
+        });
+
+        // Filter out roles that already have allocations
+        const availableRoles = userAccessList.filter(role => 
+            !existingRoleAllocations.some(alloc => alloc.UserAccessID === role.ID)
+        );
+
+        const subDep = await SubDepartment.findOne({ where: { ID: subdepid } });
+        const dept = await Department.findOne({ where: { ID: depid } });
+
+        return res.json({
+            status: true,
+            data: {
+                availableRoles,
+                selectedRole: useraccessid !== 0 ? availableRoles.find(r => r.ID === parseInt(useraccessid)) : (availableRoles.length > 0 ? availableRoles[0] : null),
+                linkid,
+                depid,
+                subdepid,
+                departmentName: dept ? dept.Name : '',
+                subDepartmentName: subDep ? subDep.Name : ''
+            }
+        });
+    } catch (error) {
+        console.error('Error in add-role GET route:', error);
+        return res.status(500).json({ status: false, error: 'Internal server error', details: error.message });
+    }
+});
+
+// POST /allocation/add-role - Create new role allocation
+router.post('/add-role', requireAuth, async (req, res) => {
+    try {
+        const {
+            depid, subdepid, useraccessid, linkid,
+            View = false, Add = false, Edit = false,
+            Delete = false, Print = false, Confidential = false,
+            Comment = false, Collaborate = false, Finalize = false, Masking = false,
+            fields
+        } = req.body;
+
+        // Validate required fields
+        if (!depid || !subdepid || !useraccessid || !linkid) {
+            return res.status(400).json({ 
+                status: false,
+                error: 'Missing required fields', 
+                details: 'depid, subdepid, useraccessid, and linkid are required' 
+            });
+        }
+
+        // Check if role allocation already exists
+        const existing = await RoleDocumentAccess.findOne({
+            where: { 
+                LinkID: linkid, 
+                UserAccessID: useraccessid 
+            },
+            attributes: { exclude: ['id'] }
+        });
+
+        if (existing) {
+            // Update existing allocation
+            const fieldsValue = fields !== undefined && fields !== null ? fields : [];
+            
+            await RoleDocumentAccess.update({
+                View: View,
+                Add: Add,
+                Edit: Edit,
+                Delete: Delete,
+                Print: Print,
+                Confidential: Confidential,
+                Comment: Comment,
+                Collaborate: Collaborate,
+                Finalize: Finalize,
+                Masking: Masking,
+                fields: fieldsValue,
+                Active: true
+            }, {
+                where: { LinkID: linkid, UserAccessID: useraccessid }
+            });
+
+            return res.json({
+                status: true,
+                message: 'Role allocation updated successfully'
+            });
+        }
+
+        // Create new role allocation
+        const createdBy = req.user?.userName || null;
+        const createdDate = new Date();
+        const fieldsValue = fields !== undefined && fields !== null ? fields : [];
+
+        await RoleDocumentAccess.create({
+            LinkID: linkid,
+            UserAccessID: useraccessid,
+            View: View,
+            Add: Add,
+            Edit: Edit,
+            Delete: Delete,
+            Print: Print,
+            Confidential: Confidential,
+            Comment: Comment,
+            Collaborate: Collaborate,
+            Finalize: Finalize,
+            Masking: Masking,
+            fields: fieldsValue,
+            Active: true,
+            CreatedBy: createdBy,
+            CreatedDate: createdDate
+        });
+
+        return res.json({
+            status: true,
+            message: 'Role allocation created successfully'
+        });
+    } catch (error) {
+        console.error('Error in add-role POST route:', error);
+        return res.status(500).json({ 
+            status: false,
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    }
+});
+
+// GET /allocation/edit-role - Get role allocation for editing
+router.get('/edit-role', requireAuth, async (req, res) => {
+    try {
+        const { linkid, useraccessid } = req.query;
+
+        if (!linkid || !useraccessid) {
+            return res.status(400).json({ 
+                status: false,
+                error: 'Missing required parameters: linkid and useraccessid' 
+            });
+        }
+
+        const roleAllocation = await RoleDocumentAccess.findOne({
+            where: { 
+                LinkID: linkid, 
+                UserAccessID: useraccessid 
+            },
+            attributes: { exclude: ['id'] },
+            include: [{
+                model: UserAccess,
+                attributes: ['ID', 'Description'],
+                as: 'userAccess'
+            }]
+        });
+
+        if (!roleAllocation) {
+            return res.status(404).json({ 
+                status: false,
+                error: 'Role allocation not found' 
+            });
+        }
+
+        return res.json({
+            status: true,
+            data: roleAllocation
+        });
+    } catch (error) {
+        console.error('Error in edit-role GET route:', error);
+        return res.status(500).json({ status: false, error: 'Internal server error', details: error.message });
+    }
+});
+
+// PUT /allocation/update-role - Update role allocation
+router.put('/update-role', requireAuth, async (req, res) => {
+    try {
+        const { linkid, useraccessid, View, Add, Edit, Delete, Print, Confidential, Comment, Collaborate, Finalize, Masking, Active, fields } = req.body;
+
+        if (!linkid || !useraccessid) {
+            return res.status(400).json({ 
+                status: false,
+                error: 'Missing required fields: linkid and useraccessid' 
+            });
+        }
+
+        const roleAllocation = await RoleDocumentAccess.findOne({
+            where: { LinkID: linkid, UserAccessID: useraccessid },
+            attributes: { exclude: ['id'] }
+        });
+
+        if (!roleAllocation) {
+            return res.status(404).json({ 
+                status: false,
+                error: 'Role allocation not found' 
+            });
+        }
+
+        const updateData = {};
+        if (View !== undefined) updateData.View = View;
+        if (Add !== undefined) updateData.Add = Add;
+        if (Edit !== undefined) updateData.Edit = Edit;
+        if (Delete !== undefined) updateData.Delete = Delete;
+        if (Print !== undefined) updateData.Print = Print;
+        if (Confidential !== undefined) updateData.Confidential = Confidential;
+        if (Comment !== undefined) updateData.Comment = Comment;
+        if (Collaborate !== undefined) updateData.Collaborate = Collaborate;
+        if (Finalize !== undefined) updateData.Finalize = Finalize;
+        if (Masking !== undefined) updateData.Masking = Masking;
+        if (Active !== undefined) updateData.Active = Active;
+        if (fields !== undefined) updateData.fields = fields;
+
+        await roleAllocation.update(updateData);
+
+        const updatedAllocation = await RoleDocumentAccess.findOne({
+            where: { LinkID: linkid, UserAccessID: useraccessid },
+            attributes: { exclude: ['id'] },
+            include: [{
+                model: UserAccess,
+                attributes: ['ID', 'Description', 'Active'],
+                as: 'userAccess'
+            }]
+        });
+
+        return res.json({ 
+            status: true, 
+            data: updatedAllocation,
+            message: 'Role allocation updated successfully' 
+        });
+    } catch (error) {
+        console.error('Error updating role allocation:', error);
+        return res.status(500).json({ status: false, error: 'Failed to update role allocation', details: error.message });
+    }
+});
+
+// DELETE /allocation/delete-role - Delete role allocation (soft delete)
+router.delete('/delete-role', requireAuth, async (req, res) => {
+    try {
+        const { linkid, useraccessid } = req.query;
+
+        if (!linkid || !useraccessid) {
+            return res.status(400).json({ 
+                status: false,
+                error: 'Missing required parameters: linkid and useraccessid' 
+            });
+        }
+
+        const roleAllocation = await RoleDocumentAccess.findOne({
+            where: { LinkID: linkid, UserAccessID: useraccessid },
+            attributes: { exclude: ['id'] }
+        });
+
+        if (!roleAllocation) {
+            return res.status(404).json({ 
+                status: false,
+                error: 'Role allocation not found' 
+            });
+        }
+
+        await roleAllocation.update({ Active: false });
+
+        return res.json({ 
+            status: true,
+            message: 'Role allocation deleted successfully' 
+        });
+    } catch (error) {
+        console.error('Error deleting role allocation:', error);
+        return res.status(500).json({ status: false, error: 'Failed to delete role allocation', details: error.message });
+    }
+});
+
+// GET /allocation/users-by-role/:useraccessid - Get all users with a specific role
+router.get('/users-by-role/:useraccessid', requireAuth, async (req, res) => {
+    try {
+        const { useraccessid } = req.params;
+
+        const users = await Users.findAll({
+            include: [{
+                model: UserAccess,
+                where: { ID: useraccessid },
+                through: { attributes: [] },
+                as: 'accessList',
+                required: true
+            }],
+            where: { Active: true },
+            attributes: ['ID', 'UserName', 'Active']
+        });
+
+        return res.json({ 
+            status: true, 
+            data: users 
+        });
+    } catch (error) {
+        console.error('Error fetching users by role:', error);
+        return res.status(500).json({ status: false, error: 'Failed to fetch users by role', details: error.message });
     }
 });
 

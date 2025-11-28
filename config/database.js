@@ -100,7 +100,8 @@ let models = [
   require("../models/newFeatures/DocumentApprovers"),
   require("../models/newFeatures/approvalmatrix"),
   require("../models/newFeatures/DocumentApprovalTracking"),
-  require("../models/newFeatures/AuditActivities")
+  require("../models/newFeatures/AuditActivities"),
+  require("../models/RoleDocumentAccessModel")
   // require('./yourModelFile') — add models here
 ];
 
