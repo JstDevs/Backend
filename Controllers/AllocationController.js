@@ -1729,6 +1729,10 @@ router.get('/add-role', requireAuth, async (req, res) => {
 // POST /allocation/add-role - Create new role allocation
 router.post('/add-role', requireAuth, async (req, res) => {
     try {
+        console.log('=== add-role POST request received ===');
+        console.log('Request body:', JSON.stringify(req.body, null, 2));
+        console.log('User from auth:', req.user);
+        
         const {
             depid, subdepid, useraccessid, linkid,
             View = false, Add = false, Edit = false,
@@ -1739,12 +1743,17 @@ router.post('/add-role', requireAuth, async (req, res) => {
 
         // Validate required fields
         if (!depid || !subdepid || !useraccessid || !linkid) {
+            console.error('Missing required fields:', { depid, subdepid, useraccessid, linkid });
             return res.status(400).json({ 
                 status: false,
                 error: 'Missing required fields', 
                 details: 'depid, subdepid, useraccessid, and linkid are required' 
             });
         }
+
+        // Ensure fields has a default value (empty array) if not provided
+        const fieldsValue = fields !== undefined && fields !== null ? fields : [];
+        console.log('Processing with:', { depid, subdepid, useraccessid, linkid, fieldsValue: Array.isArray(fieldsValue) ? `Array(${fieldsValue.length})` : fieldsValue });
 
         // Check if role allocation already exists
         const existing = await RoleDocumentAccess.findOne({
@@ -1756,9 +1765,8 @@ router.post('/add-role', requireAuth, async (req, res) => {
         });
 
         if (existing) {
+            console.log('Existing role allocation found, updating...');
             // Update existing allocation
-            const fieldsValue = fields !== undefined && fields !== null ? fields : [];
-            
             await RoleDocumentAccess.update({
                 View: View,
                 Add: Add,
@@ -1776,18 +1784,25 @@ router.post('/add-role', requireAuth, async (req, res) => {
                 where: { LinkID: linkid, UserAccessID: useraccessid }
             });
 
+            // Verify the update was successful
+            const updated = await RoleDocumentAccess.findOne({
+                where: { LinkID: linkid, UserAccessID: useraccessid },
+                attributes: { exclude: ['id'] }
+            });
+            console.log('Update successful. Updated record:', updated ? 'Found' : 'Not found');
+
             return res.json({
                 status: true,
                 message: 'Role allocation updated successfully'
             });
         }
 
+        console.log('No existing allocation found, creating new...');
         // Create new role allocation
         const createdBy = req.user?.userName || null;
         const createdDate = new Date();
-        const fieldsValue = fields !== undefined && fields !== null ? fields : [];
 
-        await RoleDocumentAccess.create({
+        const newAllocation = await RoleDocumentAccess.create({
             LinkID: linkid,
             UserAccessID: useraccessid,
             View: View,
@@ -1806,12 +1821,26 @@ router.post('/add-role', requireAuth, async (req, res) => {
             CreatedDate: createdDate
         });
 
+        console.log('Role allocation created successfully. New allocation ID:', { LinkID: newAllocation.LinkID, UserAccessID: newAllocation.UserAccessID });
+
+        // Verify the creation was successful
+        const verify = await RoleDocumentAccess.findOne({
+            where: { LinkID: linkid, UserAccessID: useraccessid },
+            attributes: { exclude: ['id'] }
+        });
+        console.log('Verification query result:', verify ? 'Found in database' : 'NOT FOUND in database');
+
         return res.json({
             status: true,
-            message: 'Role allocation created successfully'
+            message: 'Role allocation created successfully',
+            data: {
+                LinkID: newAllocation.LinkID,
+                UserAccessID: newAllocation.UserAccessID
+            }
         });
     } catch (error) {
         console.error('Error in add-role POST route:', error);
+        console.error('Error stack:', error.stack);
         return res.status(500).json({ 
             status: false,
             error: 'Internal server error', 
