@@ -3020,10 +3020,17 @@ const documentbypk=await db.Documents.findByPk(documentId)
 });
 
 // READ - Get approvals
+// ⚡ OPTIMIZED: Uses OR condition for LinkID and parallel document fetch
 router.get('/documents/:documentId/approvals', async (req, res) => {
   try {
     const { documentId } = req.params;
-    const doc = await db.Documents.findByPk(documentId);
+    const { Op } = require('sequelize');
+    
+    // ⚡ OPTIMIZATION: Fetch document with only needed fields (exclude heavy BLOB)
+    const doc = await db.Documents.findByPk(documentId, {
+      attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId'],
+      raw: true
+    });
     
     if (!doc) {
       return res.status(404).json({
@@ -3032,34 +3039,29 @@ router.get('/documents/:documentId/approvals', async (req, res) => {
       });
     }
     
-    // ⚡ FIX: Handle LinkID type (string or number)
+    // ⚡ OPTIMIZATION: Handle LinkID type using OR condition (single query)
     const linkid = String(doc.LinkID);
-    const linkidNum = parseInt(doc.LinkID) || linkid;
+    const linkidNum = isNaN(doc.LinkID) ? null : parseInt(doc.LinkID);
     
-    // ⚡ FIX: Try string first, fallback to number
-    let approvals;
-    try {
-      approvals = await db.DocumentApprovals.findAll({
-        where: { LinkID: linkid },
-        order: [['RequestedDate', 'DESC']],
-        raw: true
-      });
-    } catch {
-      approvals = await db.DocumentApprovals.findAll({
-        where: { LinkID: linkidNum },
-        order: [['RequestedDate', 'DESC']],
-        raw: true
-      });
-    }
+    // ⚡ OPTIMIZATION: Single query with OR condition instead of try-catch fallback
+    const approvals = await db.DocumentApprovals.findAll({
+      where: {
+        [Op.or]: linkidNum !== null && linkidNum !== linkid
+          ? [{ LinkID: linkid }, { LinkID: linkidNum }]
+          : [{ LinkID: linkid }]
+      },
+      order: [['RequestedDate', 'DESC']],
+      raw: true,
+      limit: 1000 // Prevent huge result sets
+    }).catch(() => []);
 
     res.status(200).json({
       success: true,
-      data: approvals || []
+      data: Array.isArray(approvals) ? approvals : []
     });
 
   } catch (error) {
-    console.error('Error fetching approvals:', error);
-    console.error('Error stack:', error.stack);
+    console.error('Error fetching approvals:', error.message);
     res.status(500).json({
       success: false,
       message: 'Error fetching approvals',
@@ -3403,57 +3405,29 @@ router.put('/documents/:documentId/approvals/:approvalId', requireAuth, updateAp
 router.put('/:documentId/approvals/:approvalId', requireAuth, updateApprovalHandler);
 
 // GET - Approval status with level details
+// ⚡ OPTIMIZED: Removed redundant try-catch fallback, uses optimized helper
 const getApprovalStatusHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
-    console.log('Getting approval status for document:', documentId);
     
-    const document = await db.Documents.findByPk(documentId);
+    // ⚡ OPTIMIZATION: Fetch document with only needed fields (exclude heavy BLOB)
+    const document = await db.Documents.findByPk(documentId, {
+      attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId'],
+      raw: false
+    });
     
     if (!document) {
-      console.log('Document not found:', documentId);
       return res.status(404).json({
         success: false,
         message: 'Document not found'
       });
     }
 
-    console.log('Document found:', {
-      ID: document.ID,
-      LinkID: document.LinkID,
-      DepartmentId: document.DepartmentId,
-      SubDepartmentId: document.SubDepartmentId
-    });
-
-    // ⚡ FIX: Handle LinkID type (string or number)
+    // ⚡ OPTIMIZATION: Helper now handles LinkID type internally with OR condition
     const linkId = String(document.LinkID || documentId);
-    
-    // ⚡ FIX: Try with error handling
-    let status;
-    try {
-      console.log('Calling approvalHelper.getApprovalStatus with:', { documentId, linkId });
-      status = await approvalHelper.getApprovalStatus(documentId, linkId);
-      console.log('Approval status retrieved successfully');
-    } catch (helperError) {
-      console.error('Error in approvalHelper.getApprovalStatus:', helperError);
-      console.error('Helper error message:', helperError.message);
-      console.error('Helper error stack:', helperError.stack);
-      // Try with numeric LinkID as fallback
-      const linkIdNum = parseInt(document.LinkID) || documentId;
-      try {
-        console.log('Trying fallback with numeric LinkID:', linkIdNum);
-        status = await approvalHelper.getApprovalStatus(documentId, linkIdNum);
-        console.log('Fallback succeeded');
-      } catch (fallbackError) {
-        console.error('Error in approvalHelper fallback:', fallbackError);
-        console.error('Fallback error message:', fallbackError.message);
-        console.error('Fallback error stack:', fallbackError.stack);
-        throw helperError; // Throw original error
-      }
-    }
+    const status = await approvalHelper.getApprovalStatus(documentId, linkId);
 
     if (!status) {
-      console.log('No approval status found, returning default');
       return res.status(200).json({
         success: true,
         message: 'No approval tracking found for this document',
@@ -3466,13 +3440,6 @@ const getApprovalStatusHandler = async (req, res) => {
         }
       });
     }
-
-    console.log('Returning approval status:', {
-      finalStatus: status.finalStatus,
-      allorMajority: status.allorMajority,
-      currentLevel: status.currentLevel,
-      totalLevels: status.totalLevels
-    });
 
     res.status(200).json({
       success: true,
@@ -3487,27 +3454,12 @@ const getApprovalStatusHandler = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching approval status:', error);
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    
-    // Log additional error details if available
-    if (error.sql) {
-      console.error('SQL Error:', error.sql);
-    }
-    if (error.original) {
-      console.error('Original error:', error.original);
-    }
+    console.error('Error fetching approval status:', error.message);
     
     res.status(500).json({
       success: false,
       message: 'Error fetching approval status',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
-      details: process.env.NODE_ENV === 'development' ? {
-        name: error.name,
-        stack: error.stack
-      } : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };

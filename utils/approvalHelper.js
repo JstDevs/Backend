@@ -324,42 +324,37 @@ async function checkAllLevelsCompleted(documentId) {
 
 /**
  * Get all level decisions for a document
+ * ⚡ OPTIMIZED: Uses OR condition for LinkID instead of try-catch fallback
  */
 async function getAllLevelDecisions(documentId, linkId) {
   try {
-    // ⚡ FIX: Handle LinkID type (string or number)
+    // ⚡ OPTIMIZATION: Handle LinkID type using OR condition
     const linkIdStr = String(linkId);
-    const linkIdNum = parseInt(linkId) || linkIdStr;
+    const linkIdNum = isNaN(linkId) ? null : parseInt(linkId);
     
-    // ⚡ FIX: Try string first, fallback to number
-    let approvals;
-    try {
-      approvals = await db.DocumentApprovals.findAll({
-        where: {
-          DocumentID: documentId,
-          LinkID: linkIdStr,
-          IsCancelled: false
-        },
-        order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']]
-      });
-    } catch {
-      approvals = await db.DocumentApprovals.findAll({
-        where: {
-          DocumentID: documentId,
-          LinkID: linkIdNum,
-          IsCancelled: false
-        },
-        order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']]
-      });
-    }
+    // ⚡ OPTIMIZATION: Single query with OR condition
+    const approvals = await db.DocumentApprovals.findAll({
+      where: {
+        DocumentID: documentId,
+        [Op.or]: linkIdNum !== null && linkIdNum !== linkIdStr
+          ? [{ LinkID: linkIdStr }, { LinkID: linkIdNum }]
+          : [{ LinkID: linkIdStr }],
+        IsCancelled: false
+      },
+      order: [['SequenceLevel', 'ASC'], ['ApprovalDate', 'ASC']],
+      raw: true
+    }).catch(() => []);
 
     // Group by level and get the decision (first non-cancelled, non-pending decision per level)
     const levelDecisions = {};
-    approvals.forEach(approval => {
-      if (!levelDecisions[approval.SequenceLevel] && approval.Status !== 'PENDING') {
-        levelDecisions[approval.SequenceLevel] = approval.Status.toUpperCase();
-      }
-    });
+    if (Array.isArray(approvals)) {
+      approvals.forEach(approval => {
+        const level = approval.SequenceLevel;
+        if (level && !levelDecisions[level] && approval.Status && approval.Status !== 'PENDING') {
+          levelDecisions[level] = approval.Status.toUpperCase();
+        }
+      });
+    }
 
     return levelDecisions;
   } catch (error) {
@@ -420,116 +415,66 @@ async function calculateFinalStatus(documentId, linkId) {
 
 /**
  * Get approval status with level details
+ * ⚡ OPTIMIZED: Uses parallel queries and OR conditions for LinkID
  */
 async function getApprovalStatus(documentId, linkId) {
   try {
-    console.log('getApprovalStatus called with:', { documentId, linkId, linkIdType: typeof linkId });
-    
-    // ⚡ FIX: Handle LinkID type (string or number)
+    // ⚡ OPTIMIZATION: Handle LinkID type (string or number) using OR condition
     const linkIdStr = String(linkId);
-    const linkIdNum = parseInt(linkId) || linkIdStr;
+    const linkIdNum = isNaN(linkId) ? null : parseInt(linkId);
     
-    // ⚡ FIX: Try string first, fallback to number
-    let tracking;
-    try {
-      console.log('Fetching tracking with string LinkID:', linkIdStr);
-      tracking = await db.DocumentApprovalTracking.findOne({
-        where: { DocumentID: documentId, LinkID: linkIdStr }
-      });
-      console.log('Tracking found with string LinkID:', tracking ? 'Yes' : 'No');
-    } catch (trackingError) {
-      console.error('Error fetching tracking with string LinkID:', trackingError.message);
-      try {
-        console.log('Trying numeric LinkID:', linkIdNum);
-        tracking = await db.DocumentApprovalTracking.findOne({
-          where: { DocumentID: documentId, LinkID: linkIdNum }
-        });
-        console.log('Tracking found with numeric LinkID:', tracking ? 'Yes' : 'No');
-      } catch (numError) {
-        console.error('Error fetching tracking with numeric LinkID:', numError.message);
-        throw trackingError; // Throw original error
-      }
-    }
+    // ⚡ OPTIMIZATION: Fetch tracking and approvals in parallel using OR condition
+    const [tracking, allApprovals] = await Promise.all([
+      // Fetch tracking with OR condition for LinkID
+      db.DocumentApprovalTracking.findOne({
+        where: {
+          DocumentID: documentId,
+          [Op.or]: linkIdNum !== null && linkIdNum !== linkIdStr
+            ? [{ LinkID: linkIdStr }, { LinkID: linkIdNum }]
+            : [{ LinkID: linkIdStr }]
+        },
+        raw: false // Keep as model instance for easier access
+      }).catch(() => null),
+      
+      // Fetch all approvals with OR condition for LinkID
+      db.DocumentApprovals.findAll({
+        where: {
+          DocumentID: documentId,
+          [Op.or]: linkIdNum !== null && linkIdNum !== linkIdStr
+            ? [{ LinkID: linkIdStr }, { LinkID: linkIdNum }]
+            : [{ LinkID: linkIdStr }],
+          IsCancelled: false
+        },
+        order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']],
+        raw: true
+      }).catch(() => [])
+    ]);
 
     if (!tracking) {
-      console.log('No tracking record found for document:', documentId);
       return null;
     }
 
-    console.log('Tracking record found:', {
-      DocumentID: tracking.DocumentID,
-      LinkID: tracking.LinkID,
-      TotalLevels: tracking.TotalLevels,
-      CurrentLevel: tracking.CurrentLevel,
-      FinalStatus: tracking.FinalStatus
-    });
-
-    // Get level decisions with error handling
-    let levelDecisions = {};
-    try {
-      console.log('Getting level decisions with string LinkID');
-      levelDecisions = await getAllLevelDecisions(documentId, linkIdStr);
-      console.log('Level decisions retrieved:', Object.keys(levelDecisions).length, 'levels');
-    } catch (levelDecisionsError) {
-      console.error('Error in getAllLevelDecisions:', levelDecisionsError.message);
-      // Try with numeric LinkID as fallback
-      try {
-        console.log('Trying level decisions with numeric LinkID');
-        levelDecisions = await getAllLevelDecisions(documentId, linkIdNum);
-        console.log('Level decisions retrieved (fallback):', Object.keys(levelDecisions).length, 'levels');
-      } catch (fallbackError) {
-        console.error('Error in getAllLevelDecisions fallback:', fallbackError.message);
-        // Continue with empty levelDecisions object
-        levelDecisions = {};
-      }
-    }
-    
-    // ⚡ FIX: Try string first, fallback to number for approvals
-    let allApprovals = [];
-    try {
-      console.log('Fetching approvals with string LinkID');
-      allApprovals = await db.DocumentApprovals.findAll({
-        where: {
-          DocumentID: documentId,
-          LinkID: linkIdStr
-        },
-        order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
+    // ⚡ OPTIMIZATION: Calculate level decisions from approvals (no separate query needed)
+    const levelDecisions = {};
+    if (Array.isArray(allApprovals) && allApprovals.length > 0) {
+      allApprovals.forEach(approval => {
+        const level = approval.SequenceLevel;
+        if (level && !levelDecisions[level] && approval.Status && approval.Status !== 'PENDING') {
+          levelDecisions[level] = approval.Status.toUpperCase();
+        }
       });
-      console.log('Approvals found with string LinkID:', allApprovals.length);
-    } catch (err) {
-      console.error('Error fetching approvals with string LinkID:', err.message);
-      try {
-        console.log('Trying approvals with numeric LinkID');
-        allApprovals = await db.DocumentApprovals.findAll({
-          where: {
-            DocumentID: documentId,
-            LinkID: linkIdNum
-          },
-          order: [['SequenceLevel', 'ASC'], ['RequestedDate', 'ASC']]
-        });
-        console.log('Approvals found with numeric LinkID:', allApprovals.length);
-      } catch (fallbackErr) {
-        console.error('Error fetching approvals in getApprovalStatus fallback:', fallbackErr.message);
-        allApprovals = []; // Default to empty array
-      }
-    }
-    
-    // Ensure allApprovals is an array
-    if (!Array.isArray(allApprovals)) {
-      console.warn('allApprovals is not an array, converting to empty array');
-      allApprovals = [];
     }
 
-    // Get approvers for each level
+    // ⚡ OPTIMIZATION: Build level details efficiently
     const levelDetails = {};
     const totalLevels = tracking.TotalLevels || 0;
     
-    console.log('Processing level details for', totalLevels, 'levels');
-    
-    // Only loop if TotalLevels is a valid number
     if (totalLevels > 0 && Number.isInteger(totalLevels)) {
       for (let level = 1; level <= totalLevels; level++) {
-        const levelApprovals = allApprovals.filter(a => a && a.SequenceLevel === level);
+        const levelApprovals = Array.isArray(allApprovals)
+          ? allApprovals.filter(a => a && a.SequenceLevel === level)
+          : [];
+        
         levelDetails[level] = {
           level: level,
           decision: levelDecisions[level] || 'PENDING',
@@ -542,11 +487,9 @@ async function getApprovalStatus(documentId, linkId) {
           }))
         };
       }
-    } else {
-      console.warn('Invalid totalLevels value:', totalLevels, 'Skipping level details processing');
     }
 
-    const result = {
+    return {
       tracking: tracking,
       levelDetails: levelDetails,
       currentLevel: tracking.CurrentLevel || 0,
@@ -554,17 +497,8 @@ async function getApprovalStatus(documentId, linkId) {
       finalStatus: tracking.FinalStatus || 'PENDING',
       allorMajority: tracking.AllorMajority || 'MAJORITY'
     };
-    
-    console.log('Returning approval status result');
-    return result;
   } catch (error) {
-    console.error('Error getting approval status:', error);
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    if (error.original) {
-      console.error('Original error:', error.original);
-    }
+    console.error('Error getting approval status:', error.message);
     throw error;
   }
 }

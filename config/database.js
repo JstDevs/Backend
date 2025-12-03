@@ -40,14 +40,16 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
 
    pool: {
         // Maximum number of connection in pool
-        max: 10, 
+        max: 20, // ⚡ INCREASED: More connections for parallel queries
         // Minimum number of connection in pool
-        min: 0, 
+        min: 2, // ⚡ INCREASED: Keep some connections ready
         // Maximum time (in ms) that pool will try to get connection before throwing error
-        acquire: 30000, 
+        acquire: 60000, // ⚡ INCREASED: 60 seconds for long-running queries
         // Maximum time (in ms) a connection can be idle before being released.
         // Set this to a value LESS THAN the MySQL server's wait_timeout.
-        idle: 15000 
+        idle: 30000, // ⚡ INCREASED: 30 seconds (less than typical MySQL wait_timeout of 28800)
+        // ⚡ NEW: Evict idle connections
+        evict: 10000 // Check for idle connections every 10 seconds
     },
   dialectOptions: {
     // instanceName: 'SQLEXPRESS', // 🟢 THIS IS REQUIRED
