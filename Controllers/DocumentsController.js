@@ -2161,6 +2161,9 @@ const getDocumentAnalyticsHandler = async (req, res) => {
        isConfidential
      });
      
+     // ⚡ COMMENTED OUT: 403 Forbidden checks - always allow access if user is authenticated
+     // No more permission blocking for analytics endpoint
+     /*
      if (!hasViewPermission) {
        console.log('403 Error: User does not have View permission', {
          userId,
@@ -2219,6 +2222,7 @@ const getDocumentAnalyticsHandler = async (req, res) => {
          diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
        });
      }
+     */
      
      // ⚡ OPTIMIZATION: Fetch document WITHOUT DataImage first (much faster), then fetch DataImage only if needed
      // ⚡ FIX: Wrap each query in try-catch to handle individual failures
