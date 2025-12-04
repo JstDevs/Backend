@@ -50,6 +50,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
+    pageNumber: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     // UserGroup: {
     //   type: DataTypes.STRING,
     //   allowNull: true

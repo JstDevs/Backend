@@ -3518,7 +3518,7 @@ router.post('/documents/:documentId/restrictions',requireAuth, async (req, res) 
 router.post('/documents/:documentId/restrictions_new',requireAuth, async (req, res) => {
   try {
     const { documentId } = req.params;
-    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason,Field, restrictedType, restrictionType, xaxis, yaxis, width, height } = req.body;
+    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason,Field, restrictedType, restrictionType, xaxis, yaxis, width, height, pageNumber } = req.body;
     console.error(restrictionType);
 
     const documentbypk=await db.Documents.findByPk(documentId)
@@ -3526,7 +3526,9 @@ router.post('/documents/:documentId/restrictions_new',requireAuth, async (req, r
       throw new Error("Error : document not found");
     }
     const linkid=documentbypk.LinkID
-    const restriction = await db.DocumentRestrictions.create({
+    
+    // Prepare restriction data
+    const restrictionDataToSave = {
       DocumentID: documentId,
       Field:Field,
       UserID: UserID,
@@ -3544,16 +3546,24 @@ router.post('/documents/:documentId/restrictions_new',requireAuth, async (req, r
       CreatedDate: new Date(),
       Reason: reason,
       Active: true
-    });
-    console.error(restriction.toJSON());
+    };
 
+    // Add pageNumber if provided (column exists in database)
+    if (pageNumber !== undefined && pageNumber !== null) {
+      restrictionDataToSave.pageNumber = pageNumber;
+    }
 
-    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restriction.toJSON()), req,linkid);
+    const restriction = await db.DocumentRestrictions.create(restrictionDataToSave);
+    const restrictionData = restriction.toJSON ? restriction.toJSON() : restriction;
+    
+    console.error(restrictionData);
+
+    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restrictionData), req,linkid);
 
     res.status(201).json({
       success: true,
       message: 'Restriction applied successfully',
-      data: restriction
+      data: restrictionData
     });
 
   } catch (error) {
@@ -3576,9 +3586,20 @@ router.get('/documents/:documentId/restrictions', async (req, res) => {
       order: [['CreatedDate', 'DESC']]
     });
 
+    // Ensure pageNumber is included (default to 1 if null for backward compatibility)
+    const restrictionsWithPageNumber = restrictions.map(r => {
+      const restriction = r.toJSON ? r.toJSON() : r;
+      return {
+        ...restriction,
+        pageNumber: restriction.pageNumber !== null && restriction.pageNumber !== undefined 
+          ? restriction.pageNumber 
+          : 1
+      };
+    });
+
     res.status(200).json({
       success: true,
-      data: restrictions
+      data: restrictionsWithPageNumber
     });
 
   } catch (error) {
