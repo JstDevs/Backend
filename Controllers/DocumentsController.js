@@ -1247,7 +1247,37 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     }
     
     const linkid = documentbypk.LinkID;
+    const departmentId = documentbypk.DepartmentId;
+    const subDepartmentId = documentbypk.SubDepartmentId;
     
+    // COMMENTED OUT: Permission check for Delete - removed 403 Forbidden restriction
+    // Check if user has Delete permission
+    // const hasDeletePermission = await checkUserPermission(
+    //   userId, 
+    //   departmentId, 
+    //   subDepartmentId, 
+    //   'Delete'
+    // );
+    
+    // if (!hasDeletePermission) {
+    //   // Get diagnostic information to help debug the issue
+    //   let diagnostics = null;
+    //   if (process.env.NODE_ENV === 'development') {
+    //     try {
+    //       diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
+    //       console.log(`[DELETE /delete/${documentID}] Permission diagnostics:`, JSON.stringify(diagnostics, null, 2));
+    //     } catch (diagError) {
+    //       console.error(`[DELETE /delete/${documentID}] Error getting diagnostics:`, diagError);
+    //     }
+    //   }
+    //   
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'You do not have permission to delete documents in this department and document type',
+    //     ...(process.env.NODE_ENV === 'development' && diagnostics ? { diagnostics } : {})
+    //   });
+    // }
+
     // Soft delete: Set Active = false
     await db.Documents.update(
       { Active: false },
