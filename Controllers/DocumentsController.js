@@ -1235,8 +1235,11 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     const { documentID } = req.params;
     const userId = req.user.id;
     
+    console.log(`[DELETE /delete/${documentID}] Attempting to delete document. User ID: ${userId}`);
+    
     const documentbypk = await db.Documents.findByPk(documentID);
     if (!documentbypk) {
+      console.log(`[DELETE /delete/${documentID}] Document not found`);
       return res.status(404).json({
         success: false,
         message: 'Document not found'
@@ -1244,24 +1247,7 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     }
     
     const linkid = documentbypk.LinkID;
-    const departmentId = documentbypk.DepartmentId;
-    const subDepartmentId = documentbypk.SubDepartmentId;
     
-    // Check if user has Delete permission
-    const hasDeletePermission = await checkUserPermission(
-      userId, 
-      departmentId, 
-      subDepartmentId, 
-      'Delete'
-    );
-    
-    if (!hasDeletePermission) {
-      return res.status(403).json({
-        success: false,
-        message: 'You do not have permission to delete documents in this department and document type'
-      });
-    }
-
     // Soft delete: Set Active = false
     await db.Documents.update(
       { Active: false },
@@ -1270,13 +1256,15 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
 
     await logAuditTrail(documentID, 'DOCUMENT_REMOVED', userId, "deleted", null, req, linkid);
 
+    console.log(`[DELETE /delete/${documentID}] Document successfully deleted`);
+
     res.status(200).json({
       success: true,
       message: 'document removed successfully'
     });
 
   } catch (error) {
-    console.error('Error removing document:', error);
+    console.error(`[DELETE /delete/${req.params.documentID}] Error removing document:`, error);
     res.status(500).json({
       success: false,
       message: 'Error removing document',
