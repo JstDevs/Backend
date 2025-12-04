@@ -3617,17 +3617,41 @@ router.get('/documents/:documentId/restrictions/:id', async (req, res) => {
 router.delete('/documents/:documentId/restrictions/:restrictionId',requireAuth, async (req, res) => {
   try {
     const { documentId, restrictionId } = req.params;
-    const  removedBy  = req.user.id;
-const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const removedBy = req.user.id;
+    
+    // Check if document exists
+    const documentbypk = await db.Documents.findByPk(documentId);
+    if (!documentbypk) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+    
+    const linkid = documentbypk.LinkID;
+    
+    // Check if restriction exists
     const restriction = await db.DocumentRestrictions.findByPk(restrictionId);
+    if (!restriction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Restriction not found'
+      });
+    }
 
-    await db.DocumentRestrictions.destroy(
-     
-      { where: { ID: restrictionId } }
-    );
+    // Verify restriction belongs to the document
+    if (restriction.DocumentID != documentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Restriction does not belong to this document'
+      });
+    }
 
-    await logAuditTrail(documentId, 'RESTRICTION_REMOVED', removedBy, restriction?.toJSON(), null, req,linkid);
+    await db.DocumentRestrictions.destroy({
+      where: { ID: restrictionId }
+    });
+
+    await logAuditTrail(documentId, 'RESTRICTION_REMOVED', removedBy, restriction?.toJSON(), null, req, linkid);
 
     res.status(200).json({
       success: true,
