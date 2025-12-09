@@ -53,10 +53,10 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
     },
   dialectOptions: {
     // instanceName: 'SQLEXPRESS', // 🟢 THIS IS REQUIRED
-    options: {
-      trustServerCertificate: true,
-      packetSize: 8192, // Optional: Adjust packet size if needed
-    }
+    // options: {
+    //   trustServerCertificate: true,
+    //   packetSize: 8192, // Optional: Adjust packet size if needed
+    // }
   },
   logging: false
 });
