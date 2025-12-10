@@ -321,7 +321,7 @@ router.get('/profile', requireAuth, async (req, res) => {
         res.json( {
             user: {
                 ...user.toJSON(),
-                userAccessArray: user.userAccessArray ? JSON.parse(user.userAccessArray) : [],
+                userAccessArray: user.userAccessArray || [], // Getter already parses it, just ensure it's an array
                 userAccess: user.userAccess ? user.userAccess.Description : null
             },
             username: req.user.username
