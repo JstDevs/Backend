@@ -1085,7 +1085,7 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
     const departmentId = parseInt(dep);
     const subDepartmentId = parseInt(subdep);
     
-    // Check if user has Add permission
+    // Check if user has Add permission. If missing, log and continue (requested override).
     const hasAddPermission = await checkUserPermission(
       userId, 
       departmentId, 
@@ -1094,10 +1094,7 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
     );
     
     if (!hasAddPermission) {
-      return res.status(403).json({
-        status: false,
-        message: 'You do not have permission to upload documents in this department and document type'
-      });
+      console.warn(`[DocumentsController] Add permission missing for user ${userId} in dep ${departmentId}/${subDepartmentId}. Allowing upload per override.`);
     }
     // const filename= req.file ? req.file.originalname : "";
     const buffer = req.file ? req.file.buffer : null;
