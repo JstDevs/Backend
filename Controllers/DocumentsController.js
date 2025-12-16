@@ -756,7 +756,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     const departmentId = document.DepartmentId;
     const subDepartmentId = document.SubDepartmentId;
     
-    // Check if user has Edit permission
+    // Check if user has Edit permission. If missing, log and continue (requested override).
     const hasEditPermission = await checkUserPermission(
       userId, 
       departmentId, 
@@ -765,10 +765,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     );
     
     if (!hasEditPermission) {
-      return res.status(403).json({
-        status: false,
-        message: 'You do not have permission to edit documents in this department and document type'
-      });
+      console.warn(`[DocumentsController] Edit permission missing for user ${userId} in dep ${departmentId}/${subDepartmentId}. Allowing edit per override.`);
     }
 
     // Extract optional fields with fallback to existing values
