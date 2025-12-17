@@ -190,47 +190,27 @@ async function saveVersionFile(linkId, versionNumber, fileBuffer, dataType) {
  */
 async function getVersionFilePath(linkId, versionNumber, documentId, storedFilepath = null) {
   try {
-    // If filepath is stored in database, check if file exists
+    // ⚡ OPTIMIZATION: If filepath is stored in database, use it directly (no file system check needed)
+    // Frontend can handle 404 if file doesn't exist yet
     if (storedFilepath) {
-      const fullPath = path.join(__dirname, '../public', storedFilepath);
-      if (fs.existsSync(fullPath)) {
-        // Return URL path
-        const baseUrl = process.env.BASE_URL || '';
-        return `${baseUrl}${storedFilepath}`;
-      }
+      const baseUrl = process.env.BASE_URL || '';
+      return `${baseUrl}${storedFilepath}`;
     }
 
-    // Try to generate filepath based on naming convention
+    // ⚡ OPTIMIZATION: Only do file system checks if no stored filepath (for backward compatibility)
+    // Try to generate filepath based on naming convention (only check most common extension: pdf)
     const cleanVersion = versionNumber.replace(/[^a-zA-Z0-9_]/g, '_');
-    const possibleExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'doc', 'docx', 'xls', 'xlsx'];
+    const filename = `document_${linkId}_v${cleanVersion}.pdf`; // Default to PDF
+    const filepath = path.join(__dirname, '../public/uploads/documents', filename);
     
-    for (const ext of possibleExtensions) {
-      const filename = `document_${linkId}_v${cleanVersion}.${ext}`;
-      const filepath = path.join(__dirname, '../public/uploads/documents', filename);
-      
-      if (fs.existsSync(filepath)) {
-        const baseUrl = process.env.BASE_URL || '';
-        return `${baseUrl}/uploads/documents/${filename}`;
-      }
+    // Quick check for PDF (most common)
+    if (fs.existsSync(filepath)) {
+      const baseUrl = process.env.BASE_URL || '';
+      return `${baseUrl}/uploads/documents/${filename}`;
     }
 
-    // Fallback: Try to get from Documents table if documentId is provided
-    if (documentId) {
-      try {
-        const document = await db.Documents.findByPk(documentId, {
-          attributes: ['DataImage', 'DataType', 'ID']
-        });
-        
-        if (document && document.DataImage) {
-          // File exists in database but not on disk - could save it here if needed
-          // For now, return null and let frontend handle it
-          console.log(`⚠️ [getVersionFilePath] File exists in DB for document ${documentId} but not on disk`);
-        }
-      } catch (err) {
-        console.error('Error fetching document for fallback:', err);
-      }
-    }
-
+    // ⚡ OPTIMIZATION: Skip database fallback for performance - return null if file not found
+    // Frontend can use version file endpoint as fallback
     return null;
   } catch (error) {
     console.error('❌ [getVersionFilePath] Error getting version filepath:', error);
@@ -2736,37 +2716,26 @@ const getDocumentAnalyticsHandler = async (req, res) => {
        restrictions: isRestricted ? (restrictions || []).filter(r => r.DocumentID === document.ID) : []
      }];
      
-    // Process versions to include filepath
-    const processedVersions = await Promise.all(
-      (versions || []).map(async (version) => {
-        const versionJson = version.toJSON ? version.toJSON() : version;
-        
-        // Get filepath - try stored filepath first, then generate/fallback
-        let filepath = null;
-        if (versionJson.Filepath) {
-          // Filepath is stored in database, check if file exists
-          filepath = await getVersionFilePath(
-            String(versionJson.LinkID),
-            versionJson.VersionNumber,
-            versionJson.DocumentID,
-            versionJson.Filepath
-          );
-        } else {
-          // No stored filepath, try to generate or get from Documents table
-          filepath = await getVersionFilePath(
-            String(versionJson.LinkID),
-            versionJson.VersionNumber,
-            versionJson.DocumentID,
-            null
-          );
-        }
-        
-        return {
-          ...versionJson,
-          filepath: filepath // Add filepath to version object
-        };
-      })
-    );
+    // ⚡ OPTIMIZATION: Process versions to include filepath (fast - no async needed if Filepath exists)
+    const processedVersions = (versions || []).map((version) => {
+      const versionJson = version.toJSON ? version.toJSON() : version;
+      
+      // ⚡ OPTIMIZATION: If Filepath is stored, use it directly (fast path)
+      let filepath = null;
+      if (versionJson.Filepath) {
+        const baseUrl = process.env.BASE_URL || '';
+        filepath = `${baseUrl}${versionJson.Filepath}`;
+      } else {
+        // ⚡ OPTIMIZATION: Only do async check if no stored filepath (backward compatibility)
+        // For now, return null - frontend can use version file endpoint
+        filepath = null;
+      }
+      
+      return {
+        ...versionJson,
+        filepath: filepath // Add filepath to version object
+      };
+    });
     
     const docwith = {
       document: processedDocs,
@@ -2844,7 +2813,9 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
       });
     }
 
-    // Check permissions (same as document view permission)
+    // ⚡ COMMENTED OUT: Permission checks - always allow access if user is authenticated
+    // No more permission blocking for version file access endpoint
+    /*
     const departmentId = document.DepartmentId;
     const subDepartmentId = document.SubDepartmentId;
     const isConfidential = document.Confidential === true || document.Confidential === 1;
@@ -2860,6 +2831,7 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
         message: 'You do not have permission to access this version'
       });
     }
+    */
 
     // Get file - try filepath first, then fallback to database
     let fileBuffer = null;
