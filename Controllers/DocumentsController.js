@@ -1669,10 +1669,10 @@ router.get('/documents/:documentId/convert-to-pdfa', async (req, res) => {
 
 router.get('/documents/:userid', async (req, res) => {
   try {
-    const { userId, page = 1, limit = 10, search = '', status = 'all' } = req.query;
+    const { userId, page = 1, limit = 15, search = '', status = 'all' } = req.query;
     const {userid}=req.params
     // ⚡ FIX: Ensure limit and page are properly parsed as integers
-    const parsedLimit = parseInt(limit, 10) || 10;
+    const parsedLimit = parseInt(limit, 10) || 15;
     const parsedPage = parseInt(page, 10) || 1;
     const offset = (parsedPage - 1) * parsedLimit;
 
