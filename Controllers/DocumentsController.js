@@ -971,12 +971,14 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     });
 
     // Build update object with only provided fields
+    // ⚡ FIX: Prioritize uploaded file (req.file.buffer) over dataImage from body
+    const fileDataImage = buffer ? buffer : (dataImage ? dataImage : record.DataImage);
+    
     const updateData = {
       LinkID: record.LinkID,
       Createdby: req.user.userName,
       CreatedDate: new Date(),
-      // DataImage: buffer ? buffer : record.DataImage,
-      DataImage: dataImage ? dataImage : record.DataImage,
+      DataImage: fileDataImage, // ✅ FIX: Use uploaded file buffer if available, otherwise use dataImage or old file
       DataType: req.file ? (req.file.mimetype ? req.file.mimetype.split("/")[1] : "") : record.DataType,
       Active: true,
       DepartmentId: dep !== undefined ? parseInt(dep) : record.DepartmentId,
@@ -2784,7 +2786,7 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
       });
     }
 
-    // Fetch version record
+    // Fetch version record (DataImage is NOT in DocumentVersions table, it's in Documents table)
     const version = await db.DocumentVersions.findByPk(versionId);
     if (!version) {
       return res.status(404).json({
@@ -2839,57 +2841,84 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
     let filename = `document_${version.LinkID}_${version.VersionNumber}.pdf`;
 
     // Try to get file from disk if filepath exists
-    if (version.Filepath) {
-      const fullPath = path.join(__dirname, '../public', version.Filepath);
-      if (fs.existsSync(fullPath)) {
-        fileBuffer = fs.readFileSync(fullPath);
-        
-        // Determine content type from file extension
-        const ext = path.extname(version.Filepath).toLowerCase();
-        if (ext === '.pdf') contentType = 'application/pdf';
-        else if (ext === '.png') contentType = 'image/png';
-        else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-        else if (ext === '.doc') contentType = 'application/msword';
-        else if (ext === '.docx') contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        else if (ext === '.xls') contentType = 'application/vnd.ms-excel';
-        else if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-        
-        filename = path.basename(version.Filepath);
+    if (version.Filepath && version.Filepath.trim() !== '') {
+      try {
+        const fullPath = path.join(__dirname, '../public', version.Filepath);
+        if (fs.existsSync(fullPath)) {
+          fileBuffer = fs.readFileSync(fullPath);
+          
+          // Determine content type from file extension
+          const ext = path.extname(version.Filepath).toLowerCase();
+          if (ext === '.pdf') contentType = 'application/pdf';
+          else if (ext === '.png') contentType = 'image/png';
+          else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+          else if (ext === '.doc') contentType = 'application/msword';
+          else if (ext === '.docx') contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          else if (ext === '.xls') contentType = 'application/vnd.ms-excel';
+          else if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          
+          filename = path.basename(version.Filepath);
+        } else {
+          console.log(`⚠️ [VERSION FILE] File not found on disk: ${fullPath}`);
+        }
+      } catch (fileError) {
+        console.error('❌ [VERSION FILE] Error reading file from disk:', fileError);
+        // Continue to fallback
       }
     }
 
     // Fallback: Get from database if file not found on disk
     if (!fileBuffer) {
-      // Try to get from version's DataImage
-      if (version.DataImage && version.DataImage.length > 0) {
-        fileBuffer = version.DataImage;
-        
-        // Try to determine content type from Documents table
+      try {
+        // Try to get from Documents table using DocumentID (more reliable)
         const versionDocument = await db.Documents.findByPk(version.DocumentID, {
-          attributes: ['DataType']
-        });
-        if (versionDocument && versionDocument.DataType) {
-          const dataType = versionDocument.DataType.toLowerCase();
-          if (dataType.includes('pdf')) contentType = 'application/pdf';
-          else if (dataType.includes('png')) contentType = 'image/png';
-          else if (dataType.includes('jpg') || dataType.includes('jpeg')) contentType = 'image/jpeg';
-        }
-      } else {
-        // Last resort: get from current document (shouldn't happen but for safety)
-        const currentDoc = await db.Documents.findOne({
-          where: { LinkID: version.LinkID, Active: true },
-          attributes: ['DataImage', 'DataType']
+          attributes: ['DataImage', 'DataType', 'ID']
         });
         
-        if (currentDoc && currentDoc.DataImage) {
-          fileBuffer = currentDoc.DataImage;
-          if (currentDoc.DataType) {
-            const dataType = currentDoc.DataType.toLowerCase();
+        if (versionDocument && versionDocument.DataImage) {
+          // Convert to Buffer if needed
+          fileBuffer = Buffer.isBuffer(versionDocument.DataImage) 
+            ? versionDocument.DataImage 
+            : Buffer.from(versionDocument.DataImage);
+          
+          // Determine content type
+          if (versionDocument.DataType) {
+            const dataType = versionDocument.DataType.toLowerCase();
             if (dataType.includes('pdf')) contentType = 'application/pdf';
             else if (dataType.includes('png')) contentType = 'image/png';
             else if (dataType.includes('jpg') || dataType.includes('jpeg')) contentType = 'image/jpeg';
+            else if (dataType.includes('doc')) contentType = 'application/msword';
+            else if (dataType.includes('docx')) contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            else if (dataType.includes('xls')) contentType = 'application/vnd.ms-excel';
+            else if (dataType.includes('xlsx')) contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          }
+          
+          // Update filename
+          const ext = versionDocument.DataType ? `.${versionDocument.DataType.split('/').pop()}` : '.pdf';
+          filename = `document_${version.LinkID}_${version.VersionNumber}${ext}`;
+        } else {
+          // Last resort: get from current active document
+          const currentDoc = await db.Documents.findOne({
+            where: { LinkID: version.LinkID, Active: true },
+            attributes: ['DataImage', 'DataType']
+          });
+          
+          if (currentDoc && currentDoc.DataImage) {
+            fileBuffer = Buffer.isBuffer(currentDoc.DataImage) 
+              ? currentDoc.DataImage 
+              : Buffer.from(currentDoc.DataImage);
+            if (currentDoc.DataType) {
+              const dataType = currentDoc.DataType.toLowerCase();
+              if (dataType.includes('pdf')) contentType = 'application/pdf';
+              else if (dataType.includes('png')) contentType = 'image/png';
+              else if (dataType.includes('jpg') || dataType.includes('jpeg')) contentType = 'image/jpeg';
+            }
+            filename = `document_${version.LinkID}_${version.VersionNumber}.pdf`;
           }
         }
+      } catch (fallbackError) {
+        console.error('❌ [VERSION FILE] Error in fallback file retrieval:', fallbackError);
+        console.error('Error stack:', fallbackError.stack);
       }
     }
 
