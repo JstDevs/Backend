@@ -125,6 +125,119 @@ function incrementVersion(currentVersion, isMinorVersion, finalize) {
   return result;
 }
 
+/**
+ * Save version file to disk with version-specific naming
+ * @param {string} linkId - Document LinkID
+ * @param {string} versionNumber - Version number (e.g., "v1", "v1.1")
+ * @param {Buffer} fileBuffer - File buffer to save
+ * @param {string} dataType - File type/extension (e.g., "pdf", "png")
+ * @returns {Promise<string>} Filepath relative to public directory
+ */
+async function saveVersionFile(linkId, versionNumber, fileBuffer, dataType) {
+  try {
+    // Create uploads directory if it doesn't exist
+    const uploadsDir = path.join(__dirname, '../public/uploads/documents');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Determine file extension
+    let extension = 'pdf'; // default
+    if (dataType) {
+      // Handle different dataType formats
+      if (dataType.includes('pdf')) extension = 'pdf';
+      else if (dataType.includes('png')) extension = 'png';
+      else if (dataType.includes('jpg') || dataType.includes('jpeg')) extension = 'jpg';
+      else if (dataType.includes('doc')) extension = 'doc';
+      else if (dataType.includes('docx')) extension = 'docx';
+      else if (dataType.includes('xls')) extension = 'xls';
+      else if (dataType.includes('xlsx')) extension = 'xlsx';
+      else {
+        // Try to extract extension from dataType
+        const match = dataType.match(/\.?(\w+)$/);
+        if (match) extension = match[1].toLowerCase();
+      }
+    }
+
+    // Clean version number for filename (remove dots, keep only alphanumeric and underscore)
+    const cleanVersion = versionNumber.replace(/[^a-zA-Z0-9_]/g, '_');
+    
+    // Generate filename: document_{LinkID}_v{VersionNumber}.{ext}
+    const filename = `document_${linkId}_v${cleanVersion}.${extension}`;
+    const filepath = path.join(uploadsDir, filename);
+
+    // Save file to disk
+    fs.writeFileSync(filepath, fileBuffer);
+
+    // Return relative path for database storage
+    const relativePath = `/uploads/documents/${filename}`;
+    
+    console.log(`✅ [saveVersionFile] Saved version file: ${relativePath}`);
+    return relativePath;
+  } catch (error) {
+    console.error('❌ [saveVersionFile] Error saving version file:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get filepath for a specific version
+ * @param {string} linkId - Document LinkID
+ * @param {string} versionNumber - Version number
+ * @param {number} documentId - Document ID (for fallback)
+ * @param {string} storedFilepath - Filepath stored in database (if any)
+ * @returns {Promise<string|null>} Filepath or null if not found
+ */
+async function getVersionFilePath(linkId, versionNumber, documentId, storedFilepath = null) {
+  try {
+    // If filepath is stored in database, check if file exists
+    if (storedFilepath) {
+      const fullPath = path.join(__dirname, '../public', storedFilepath);
+      if (fs.existsSync(fullPath)) {
+        // Return URL path
+        const baseUrl = process.env.BASE_URL || '';
+        return `${baseUrl}${storedFilepath}`;
+      }
+    }
+
+    // Try to generate filepath based on naming convention
+    const cleanVersion = versionNumber.replace(/[^a-zA-Z0-9_]/g, '_');
+    const possibleExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'doc', 'docx', 'xls', 'xlsx'];
+    
+    for (const ext of possibleExtensions) {
+      const filename = `document_${linkId}_v${cleanVersion}.${ext}`;
+      const filepath = path.join(__dirname, '../public/uploads/documents', filename);
+      
+      if (fs.existsSync(filepath)) {
+        const baseUrl = process.env.BASE_URL || '';
+        return `${baseUrl}/uploads/documents/${filename}`;
+      }
+    }
+
+    // Fallback: Try to get from Documents table if documentId is provided
+    if (documentId) {
+      try {
+        const document = await db.Documents.findByPk(documentId, {
+          attributes: ['DataImage', 'DataType', 'ID']
+        });
+        
+        if (document && document.DataImage) {
+          // File exists in database but not on disk - could save it here if needed
+          // For now, return null and let frontend handle it
+          console.log(`⚠️ [getVersionFilePath] File exists in DB for document ${documentId} but not on disk`);
+        }
+      } catch (err) {
+        console.error('Error fetching document for fallback:', err);
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.error('❌ [getVersionFilePath] Error getting version filepath:', error);
+    return null;
+  }
+}
+
 
 async function processDocument(doc, restrictions, OCRFields, templates, skipCache = false) {
   const restrictions_open_draw = restrictions.map(r => r.dataValues);
@@ -665,6 +778,24 @@ Description
       }
     }
     console.log('Version Number:', versionNumber);
+    
+    // Save version file to disk
+    let versionFilepath = null;
+    try {
+      if (newdoc.DataImage && newdoc.DataImage.length > 0) {
+        const dataType = newdoc.DataType || 'pdf';
+        versionFilepath = await saveVersionFile(
+          String(record.LinkID),
+          versionNumber,
+          newdoc.DataImage,
+          dataType
+        );
+        console.log('✅ [EDITOLD] Version file saved:', versionFilepath);
+      }
+    } catch (fileError) {
+      console.error('❌ [EDITOLD] Error saving version file:', fileError);
+    }
+    
     await db.DocumentVersions.create({
       LinkID: record.LinkID,
       DocumentID: newdoc.ID,
@@ -683,9 +814,10 @@ Description
         ExpirationDate: expdate,
         Remarks: remarks
       },
-      DataImage: record.DataImage,
+      DataImage: newdoc.DataImage, // ✅ FIX: Use newdoc.DataImage instead of record.DataImage
       IsCurrentVersion: true,
       Active: true,
+      Filepath: versionFilepath, // ✅ NEW: Store filepath (will be set above)
       FileDescription,
       Description
     });
@@ -1016,6 +1148,26 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     console.log('  - DocumentID:', newdoc.ID);
     console.log('  - VersionNumber:', versionNumber);
     
+    // Save version file to disk with version-specific naming
+    let versionFilepath = null;
+    try {
+      if (newdoc.DataImage && newdoc.DataImage.length > 0) {
+        const dataType = newdoc.DataType || 'pdf';
+        versionFilepath = await saveVersionFile(
+          String(linkid),
+          versionNumber,
+          newdoc.DataImage,
+          dataType
+        );
+        console.log('✅ [VERSION DEBUG] Version file saved:', versionFilepath);
+      } else {
+        console.warn('⚠️ [VERSION DEBUG] No DataImage found in newdoc, skipping file save');
+      }
+    } catch (fileError) {
+      console.error('❌ [VERSION DEBUG] Error saving version file:', fileError);
+      // Continue even if file save fails (backward compatibility)
+    }
+    
     const versionRecord = await db.DocumentVersions.create({
       LinkID: record.LinkID,
       DocumentID: newdoc.ID,
@@ -1023,9 +1175,10 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       ModificationDate: new Date(),
       ModifiedBy: req.user.userName,
       Changes: changes,
-      DataImage: record.DataImage,
+      DataImage: newdoc.DataImage, // ✅ FIX: Use newdoc.DataImage instead of record.DataImage
       IsCurrentVersion: true,
       Active: true,
+      Filepath: versionFilepath, // ✅ NEW: Store filepath for version file access
       FileDescription: getValue(FileDescription, record.FileDescription),
       Description: getValue(Description, record.Description)
     });
@@ -1196,6 +1349,24 @@ console.log("req.user",req.user)
     });
 
 
+    // Save version file to disk for initial version
+    let versionFilepath = null;
+    try {
+      if (newDocument.DataImage && newDocument.DataImage.length > 0) {
+        const dataType = newDocument.DataType || 'pdf';
+        versionFilepath = await saveVersionFile(
+          String(newDocument.LinkID),
+          'v1',
+          newDocument.DataImage,
+          dataType
+        );
+        console.log('✅ [CREATE] Initial version file saved:', versionFilepath);
+      }
+    } catch (fileError) {
+      console.error('❌ [CREATE] Error saving initial version file:', fileError);
+      // Continue even if file save fails
+    }
+
     await db.DocumentVersions.create({
       DocumentID: newDocument.ID,
       LinkID:newDocument.LinkID,
@@ -1205,7 +1376,8 @@ console.log("req.user",req.user)
       Changes: 'Initial version',
       DataImage: newDocument.DataImage,
       IsCurrentVersion: true,
-      Active: true
+      Active: true,
+      Filepath: versionFilepath // ✅ NEW: Store filepath for version file access
     });
     await logAuditTrail(newDocument.ID, 'CREATED', req.user.id, null, smalldocwithoutfilebuffer, req, linkid);
     // await logCollaboratorActivity(newDocument.ID, req.user.id, 'DOCUMENT_CREATED', req, linkid);
@@ -1710,8 +1882,26 @@ router.get('/documents/:userid', async (req, res) => {
     
     let userAccess = [];
     try {
-      userAccess = user?.userAccessArray ? JSON.parse(user.userAccessArray) : [];
-    } catch(e) {}
+      if (user?.userAccessArray) {
+        // Check if already parsed (array/object)
+        if (Array.isArray(user.userAccessArray) || typeof user.userAccessArray === 'object') {
+          userAccess = user.userAccessArray;
+        } else if (typeof user.userAccessArray === 'string') {
+          // Try to parse string, handle double-encoded or malformed JSON
+          const cleaned = user.userAccessArray.trim();
+          // Remove any leading/trailing non-JSON characters
+          const jsonMatch = cleaned.match(/^[\s\S]*(\[[\s\S]*\]|{[\s\S]*})[\s\S]*$/);
+          if (jsonMatch) {
+            userAccess = JSON.parse(jsonMatch[1]);
+          } else {
+            userAccess = JSON.parse(cleaned);
+          }
+        }
+      }
+    } catch(e) {
+      console.warn('Error parsing userAccessArray:', e);
+      userAccess = [];
+    }
     
     const restrictionIds = restrictions.map(r => r.DocumentID);
     
@@ -2437,13 +2627,29 @@ const getDocumentAnalyticsHandler = async (req, res) => {
          }).filter(item => item !== null)
        : [];
 
-     // ⚡ OPTIMIZATION: Process user access and approvers efficiently
-     let userAccess = [];
-     try {
-       userAccess = user?.userAccessArray ? JSON.parse(user.userAccessArray) : [];
-     } catch(e) {
-       console.warn('Error parsing userAccessArray:', e);
-     }
+    // ⚡ OPTIMIZATION: Process user access and approvers efficiently
+    let userAccess = [];
+    try {
+      if (user?.userAccessArray) {
+        // Check if already parsed (array/object)
+        if (Array.isArray(user.userAccessArray) || typeof user.userAccessArray === 'object') {
+          userAccess = user.userAccessArray;
+        } else if (typeof user.userAccessArray === 'string') {
+          // Try to parse string, handle double-encoded or malformed JSON
+          const cleaned = user.userAccessArray.trim();
+          // Remove any leading/trailing non-JSON characters
+          const jsonMatch = cleaned.match(/^[\s\S]*(\[[\s\S]*\]|{[\s\S]*})[\s\S]*$/);
+          if (jsonMatch) {
+            userAccess = JSON.parse(jsonMatch[1]);
+          } else {
+            userAccess = JSON.parse(cleaned);
+          }
+        }
+      }
+    } catch(e) {
+      console.warn('Error parsing userAccessArray:', e);
+      userAccess = [];
+    }
      
      const approversaccess = Array.isArray(approvers) 
        ? approvers.filter(e => 
@@ -2530,16 +2736,48 @@ const getDocumentAnalyticsHandler = async (req, res) => {
        restrictions: isRestricted ? (restrictions || []).filter(r => r.DocumentID === document.ID) : []
      }];
      
-     const docwith = {
-       document: processedDocs,
-       versions: versions || [],
-       collaborations: collaborations || [],
-       comments: comments || [],
-       auditTrails: auditTrails || [],
-       restrictions: restrictions || [],
-       OCRDocumentReadFields: updatedArray,
-       approvalsforusertoacceptorreject: approvalsforusertoacceptorreject
-     };
+    // Process versions to include filepath
+    const processedVersions = await Promise.all(
+      (versions || []).map(async (version) => {
+        const versionJson = version.toJSON ? version.toJSON() : version;
+        
+        // Get filepath - try stored filepath first, then generate/fallback
+        let filepath = null;
+        if (versionJson.Filepath) {
+          // Filepath is stored in database, check if file exists
+          filepath = await getVersionFilePath(
+            String(versionJson.LinkID),
+            versionJson.VersionNumber,
+            versionJson.DocumentID,
+            versionJson.Filepath
+          );
+        } else {
+          // No stored filepath, try to generate or get from Documents table
+          filepath = await getVersionFilePath(
+            String(versionJson.LinkID),
+            versionJson.VersionNumber,
+            versionJson.DocumentID,
+            null
+          );
+        }
+        
+        return {
+          ...versionJson,
+          filepath: filepath // Add filepath to version object
+        };
+      })
+    );
+    
+    const docwith = {
+      document: processedDocs,
+      versions: processedVersions, // ✅ Updated: versions now include filepath
+      collaborations: collaborations || [],
+      comments: comments || [],
+      auditTrails: auditTrails || [],
+      restrictions: restrictions || [],
+      OCRDocumentReadFields: updatedArray,
+      approvalsforusertoacceptorreject: approvalsforusertoacceptorreject
+    };
      
      res.status(200).json({
        success: true,
@@ -2560,6 +2798,153 @@ const getDocumentAnalyticsHandler = async (req, res) => {
 // ⚡ FIX: Support both routes for frontend compatibility
 router.get('/:documentId/analytics', requireAuth, getDocumentAnalyticsHandler);
 router.get('/documents/:documentId/analytics', requireAuth, getDocumentAnalyticsHandler);
+
+// ==================== VERSION FILE ACCESS ====================
+
+// GET - Download/view file for a specific version
+router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async (req, res) => {
+  try {
+    const { documentId, versionId } = req.params;
+    const userId = req.user.id;
+
+    // Validate parameters
+    if (!documentId || !versionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Document ID and Version ID are required'
+      });
+    }
+
+    // Fetch version record
+    const version = await db.DocumentVersions.findByPk(versionId);
+    if (!version) {
+      return res.status(404).json({
+        success: false,
+        message: 'Version not found'
+      });
+    }
+
+    // Verify version belongs to the document
+    const document = await db.Documents.findByPk(documentId, {
+      attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId', 'Confidential', 'Active']
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // Verify version belongs to document's LinkID
+    if (String(version.LinkID) !== String(document.LinkID)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Version does not belong to this document'
+      });
+    }
+
+    // Check permissions (same as document view permission)
+    const departmentId = document.DepartmentId;
+    const subDepartmentId = document.SubDepartmentId;
+    const isConfidential = document.Confidential === true || document.Confidential === 1;
+
+    const [hasViewPermission, hasConfidentialPermission] = await Promise.all([
+      checkUserPermission(userId, departmentId, subDepartmentId, 'View'),
+      isConfidential ? checkUserPermission(userId, departmentId, subDepartmentId, 'Confidential') : Promise.resolve(true)
+    ]);
+
+    if (!hasViewPermission || (isConfidential && !hasConfidentialPermission)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to access this version'
+      });
+    }
+
+    // Get file - try filepath first, then fallback to database
+    let fileBuffer = null;
+    let contentType = 'application/pdf'; // default
+    let filename = `document_${version.LinkID}_${version.VersionNumber}.pdf`;
+
+    // Try to get file from disk if filepath exists
+    if (version.Filepath) {
+      const fullPath = path.join(__dirname, '../public', version.Filepath);
+      if (fs.existsSync(fullPath)) {
+        fileBuffer = fs.readFileSync(fullPath);
+        
+        // Determine content type from file extension
+        const ext = path.extname(version.Filepath).toLowerCase();
+        if (ext === '.pdf') contentType = 'application/pdf';
+        else if (ext === '.png') contentType = 'image/png';
+        else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+        else if (ext === '.doc') contentType = 'application/msword';
+        else if (ext === '.docx') contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (ext === '.xls') contentType = 'application/vnd.ms-excel';
+        else if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        
+        filename = path.basename(version.Filepath);
+      }
+    }
+
+    // Fallback: Get from database if file not found on disk
+    if (!fileBuffer) {
+      // Try to get from version's DataImage
+      if (version.DataImage && version.DataImage.length > 0) {
+        fileBuffer = version.DataImage;
+        
+        // Try to determine content type from Documents table
+        const versionDocument = await db.Documents.findByPk(version.DocumentID, {
+          attributes: ['DataType']
+        });
+        if (versionDocument && versionDocument.DataType) {
+          const dataType = versionDocument.DataType.toLowerCase();
+          if (dataType.includes('pdf')) contentType = 'application/pdf';
+          else if (dataType.includes('png')) contentType = 'image/png';
+          else if (dataType.includes('jpg') || dataType.includes('jpeg')) contentType = 'image/jpeg';
+        }
+      } else {
+        // Last resort: get from current document (shouldn't happen but for safety)
+        const currentDoc = await db.Documents.findOne({
+          where: { LinkID: version.LinkID, Active: true },
+          attributes: ['DataImage', 'DataType']
+        });
+        
+        if (currentDoc && currentDoc.DataImage) {
+          fileBuffer = currentDoc.DataImage;
+          if (currentDoc.DataType) {
+            const dataType = currentDoc.DataType.toLowerCase();
+            if (dataType.includes('pdf')) contentType = 'application/pdf';
+            else if (dataType.includes('png')) contentType = 'image/png';
+            else if (dataType.includes('jpg') || dataType.includes('jpeg')) contentType = 'image/jpeg';
+          }
+        }
+      }
+    }
+
+    if (!fileBuffer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Version file not found'
+      });
+    }
+
+    // Set response headers
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', fileBuffer.length);
+
+    // Send file
+    res.send(fileBuffer);
+
+  } catch (error) {
+    console.error('Error fetching version file:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching version file',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+});
 
 // ==================== COLLABORATION CRUD OPERATIONS ====================
 

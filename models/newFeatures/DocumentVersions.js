@@ -47,6 +47,11 @@ module.exports = (sequelize, DataTypes) => {
     Active: {
       type: DataTypes.BOOLEAN,
       defaultValue: true
+    },
+    Filepath: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      comment: 'Path to version-specific file storage'
     }
   }, {
     tableName: 'DocumentVersions',
