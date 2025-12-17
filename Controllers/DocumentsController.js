@@ -166,8 +166,8 @@ async function saveVersionFile(linkId, versionNumber, fileBuffer, dataType) {
     const filename = `document_${linkId}_v${cleanVersion}.${extension}`;
     const filepath = path.join(uploadsDir, filename);
 
-    // Save file to disk
-    fs.writeFileSync(filepath, fileBuffer);
+    // ⚡ OPTIMIZATION: Use async file write instead of synchronous (non-blocking)
+    await fsPromises.writeFile(filepath, fileBuffer);
 
     // Return relative path for database storage
     const relativePath = `/uploads/documents/${filename}`;
@@ -935,8 +935,11 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       }
     }
 
+    // ⚡ OPTIMIZATION: Exclude DataImage (BLOB) from initial query - it's huge and slows down the query
+    // We'll only fetch DataImage when we actually need it
     const records = await Documents.findAll({ 
       where: { LinkID: parseInt(linkid) },
+      attributes: { exclude: ['DataImage'] }, // ⚡ Don't fetch BLOB - major performance improvement
       order: [['CreatedDate', 'DESC']] 
     });
     
@@ -972,7 +975,19 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
 
     // Build update object with only provided fields
     // ⚡ FIX: Prioritize uploaded file (req.file.buffer) over dataImage from body
-    const fileDataImage = buffer ? buffer : (dataImage ? dataImage : record.DataImage);
+    // ⚡ OPTIMIZATION: Only fetch old DataImage if no new file is uploaded
+    let fileDataImage = buffer; // Use uploaded file if available
+    if (!fileDataImage) {
+      if (dataImage) {
+        fileDataImage = dataImage; // Use dataImage from body if provided
+      } else {
+        // Only fetch old DataImage if we really need it (no new file uploaded)
+        const oldRecord = await db.Documents.findByPk(record.ID, {
+          attributes: ['DataImage']
+        });
+        fileDataImage = oldRecord?.DataImage || null;
+      }
+    }
     
     const updateData = {
       LinkID: record.LinkID,
@@ -1130,26 +1145,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     console.log('  - DocumentID:', newdoc.ID);
     console.log('  - VersionNumber:', versionNumber);
     
-    // Save version file to disk with version-specific naming
-    let versionFilepath = null;
-    try {
-      if (newdoc.DataImage && newdoc.DataImage.length > 0) {
-        const dataType = newdoc.DataType || 'pdf';
-        versionFilepath = await saveVersionFile(
-          String(linkid),
-          versionNumber,
-          newdoc.DataImage,
-          dataType
-        );
-        console.log('✅ [VERSION DEBUG] Version file saved:', versionFilepath);
-      } else {
-        console.warn('⚠️ [VERSION DEBUG] No DataImage found in newdoc, skipping file save');
-      }
-    } catch (fileError) {
-      console.error('❌ [VERSION DEBUG] Error saving version file:', fileError);
-      // Continue even if file save fails (backward compatibility)
-    }
-    
+    // ⚡ OPTIMIZATION: Create version record first, then save file in background (non-blocking)
     const versionRecord = await db.DocumentVersions.create({
       LinkID: record.LinkID,
       DocumentID: newdoc.ID,
@@ -1160,10 +1156,35 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       DataImage: newdoc.DataImage, // ✅ FIX: Use newdoc.DataImage instead of record.DataImage
       IsCurrentVersion: true,
       Active: true,
-      Filepath: versionFilepath, // ✅ NEW: Store filepath for version file access
+      Filepath: null, // Will be updated after file is saved in background
       FileDescription: getValue(FileDescription, record.FileDescription),
       Description: getValue(Description, record.Description)
     });
+    
+    // ⚡ OPTIMIZATION: Save version file in background (non-blocking) - don't wait for it
+    // This speeds up the upload response significantly
+    (async () => {
+      try {
+        if (newdoc.DataImage && newdoc.DataImage.length > 0) {
+          const dataType = newdoc.DataType || 'pdf';
+          const versionFilepath = await saveVersionFile(
+            String(linkid),
+            versionNumber,
+            newdoc.DataImage,
+            dataType
+          );
+          console.log('✅ [VERSION DEBUG] Version file saved:', versionFilepath);
+          
+          // Update version record with filepath after file is saved
+          await versionRecord.update({ Filepath: versionFilepath });
+        } else {
+          console.warn('⚠️ [VERSION DEBUG] No DataImage found in newdoc, skipping file save');
+        }
+      } catch (fileError) {
+        console.error('❌ [VERSION DEBUG] Error saving version file:', fileError);
+        // Continue even if file save fails (backward compatibility)
+      }
+    })().catch(err => console.error('Background file save error:', err));
     
     console.log('✅ [VERSION DEBUG] Version record created:', {
       ID: versionRecord.ID,
