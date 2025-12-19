@@ -42,16 +42,56 @@ async function convertPdfBufferToImages(pdfBuffer, outputFolder) {
   if (!fs.existsSync(outputFolder)) {
     fs.mkdirSync(outputFolder, { recursive: true });
   }
+  // Ensure outputpath directory exists
+  if (!fs.existsSync(outputpath)) {
+    fs.mkdirSync(outputpath, { recursive: true });
+  }
   await convertPdfToImages(tempPath,outputpath);
-  // //console.log("tempPath===========>",tempPath,"<==============", "outputpath==========>",outputpath,"<==============>",outputFolder,"<==============>")
-  const filename=`${uuid}-1.png`
-  // //console.log("file",filename,"path",outputFolder+`/${filename}`)
-  const buffer= fs.readFileSync(outputFolder+`/${filename}`);
+  
+  // Find the first PNG file that was created by poppler
+  // Check both outputpath and outputFolder in case poppler writes to parent directory
+  let imagePath = null;
+  let filename = null;
+  
+  // First, try to find PNG files in outputpath
+  try {
+    if (fs.existsSync(outputpath)) {
+      const files = fs.readdirSync(outputpath).filter(file => file.endsWith('.png'));
+      if (files.length > 0) {
+        filename = files[0];
+        imagePath = path.join(outputpath, filename);
+      }
+    }
+  } catch (err) {
+    console.warn('Error reading outputpath directory:', err);
+  }
+  
+  // If not found, check outputFolder (parent directory)
+  if (!imagePath || !fs.existsSync(imagePath)) {
+    try {
+      if (fs.existsSync(outputFolder)) {
+        const files = fs.readdirSync(outputFolder).filter(file => file.endsWith('.png') && file.includes(uuid));
+        if (files.length > 0) {
+          filename = files[0];
+          imagePath = path.join(outputFolder, filename);
+        }
+      }
+    } catch (err) {
+      console.warn('Error reading outputFolder directory:', err);
+    }
+  }
+  
+  if (!imagePath || !fs.existsSync(imagePath)) {
+    throw new Error(`PDF conversion failed: No PNG image file found in ${outputpath} or ${outputFolder}`);
+  }
+  
+  const buffer = fs.readFileSync(imagePath);
   // fs.unlinkSync(tempPath); // optional cleanup
-  // console.log("we's converting them files to imageries and is a ", filename, " - bing bang boom!")
-  console.log("filename",filename,"buffer",buffer)
+  // Ensure filename is just the basename, not the full path
+  const fileBasename = path.basename(filename);
+  console.log("filename",fileBasename,"imagePath",imagePath,"buffer length",buffer.length)
   return {
-    file:filename,
+    file: fileBasename,
     buffer: buffer,
   }; // Return the buffer of the converted image
   

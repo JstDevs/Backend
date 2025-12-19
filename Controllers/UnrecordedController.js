@@ -254,14 +254,22 @@ router.post('/documents/:documentId/ocr', async (req, res) => {
     const document = await Document.findOne({
       where: { id: documentId }
     });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
     // Get document attachment
     const attachment = document
     // console.log("attachment",attachment)
 
-    if (!attachment) {
+    if (!attachment || !attachment.DataImage) {
       return res.status(404).json({
         success: false,
-        message: 'Document attachment not found'
+        message: 'Document attachment or DataImage not found'
       });
     }
     // console.log("attachment",attachment)
@@ -284,17 +292,33 @@ router.post('/documents/:documentId/ocr', async (req, res) => {
       if (attachment.DataType === '.pdf'||attachment.DataType === 'pdf') {
         // For PDF files, you'd need to convert to image first
         // This is a simplified example - you might want to use pdf2pic or similar
-      fs.mkdirSync(path.join(__dirname,"/uploads/temp"),{recursive:true})
-      const filename=new Date().getTime()+".png";
-      const imagebuffer=await convertPdfBufferToImages(attachment.DataImage, path.join(__dirname,"/uploads/temp"),filename);
+      const uploadsTempDir = path.join(__dirname, "../uploads/temp");
+      fs.mkdirSync(uploadsTempDir, {recursive:true});
+      const imagebuffer=await convertPdfBufferToImages(attachment.DataImage, uploadsTempDir);
         // console.log("imagebuffer",imagebuffer)
         
+        if (!imagebuffer || !imagebuffer.buffer) {
+          throw new Error('Failed to convert PDF to image');
+        }
         imageBuffer = imagebuffer.buffer;
       } else {
         imageBuffer = attachment.DataImage;
       }
+
+    if (!imageBuffer) {
+      throw new Error('Image buffer is not available for OCR processing');
+    }
+
     for (let i = 0; i < ocrFields.length; i++) {
       const field = ocrFields[i];
+      
+      // Validate field properties
+      if (!field || typeof field.x !== 'number' || typeof field.y !== 'number' || 
+          typeof field.width !== 'number' || typeof field.height !== 'number' ||
+          field.width <= 0 || field.height <= 0) {
+        console.warn(`Skipping invalid field at index ${i}:`, field);
+        continue;
+      }
       
       // Convert PDF to image if needed and crop the region
      
@@ -346,15 +370,6 @@ console.log({
       ocrResults.push(newprocess);
     }
 
-    
-
-    if (!document) {
-      return res.status(404).json({
-        success: false,
-        message: 'Document not found'
-      });
-    }
-
     // Update document with OCR results
     const updateData = {};
     const currentDate = new Date();
@@ -364,8 +379,8 @@ console.log({
       const textField = `text${i + 1}`;
       const dateField = `date${i + 1}`;
       
-      updateData[textField] = ocrResults[i] || '';
-      updateData[dateField] = ocrResults[i] ? currentDate : currentDate;
+      updateData[textField] = (ocrResults[i] && ocrResults[i].text) || '';
+      updateData[dateField] = (ocrResults[i] && ocrResults[i].text) ? currentDate : currentDate;
     }
 
     await document.update(updateData);
