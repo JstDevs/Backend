@@ -1406,7 +1406,10 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     
     console.log(`[DELETE /delete/${documentID}] Attempting to delete document. User ID: ${userId}`);
     
-    const documentbypk = await db.Documents.findByPk(documentID);
+    // ⚡ OPTIMIZATION: Exclude DataImage (BLOB) to speed up query - we don't need it for delete
+    const documentbypk = await db.Documents.findByPk(documentID, {
+      attributes: { exclude: ['DataImage'] } // Skip BLOB data for faster query
+    });
     if (!documentbypk) {
       console.log(`[DELETE /delete/${documentID}] Document not found`);
       return res.status(404).json({
@@ -1447,15 +1450,20 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     //   });
     // }
 
-    // Soft delete: Set Active = false
-    await db.Documents.update(
-      { Active: false },
-      { where: { LinkID: linkid } }
-    );
+    // ⚡ OPTIMIZATION: Soft delete all versions with same LinkID in parallel with audit trail
+    // This deletes all document versions sharing the same LinkID
+    const [updateResult] = await Promise.all([
+      db.Documents.update(
+        { Active: false },
+        { where: { LinkID: linkid } }
+      ),
+      // Run audit trail in parallel (non-blocking if it fails)
+      logAuditTrail(documentID, 'DOCUMENT_REMOVED', userId, "deleted", null, req, linkid).catch(err => {
+        console.error(`[DELETE /delete/${documentID}] Audit trail error (non-blocking):`, err);
+      })
+    ]);
 
-    await logAuditTrail(documentID, 'DOCUMENT_REMOVED', userId, "deleted", null, req, linkid);
-
-    console.log(`[DELETE /delete/${documentID}] Document successfully deleted`);
+    console.log(`[DELETE /delete/${documentID}] Document successfully deleted. Updated ${updateResult[0]} record(s)`);
 
     res.status(200).json({
       success: true,

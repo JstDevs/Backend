@@ -98,7 +98,21 @@ module.exports = (sequelize, DataTypes) => {
     }
   }, {
     tableName: 'Documents',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+      {
+        fields: ['LinkID'], // ⚡ OPTIMIZATION: Index for fast delete/update operations by LinkID
+        name: 'idx_documents_linkid'
+      },
+      {
+        fields: ['Active'], // ⚡ OPTIMIZATION: Index for filtering active documents
+        name: 'idx_documents_active'
+      },
+      {
+        fields: ['LinkID', 'Active'], // ⚡ OPTIMIZATION: Composite index for common queries
+        name: 'idx_documents_linkid_active'
+      }
+    ]
   });
 // Document Versions
    DocumentsModel.associate = function(models) {{
