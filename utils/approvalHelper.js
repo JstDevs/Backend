@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 
 /**
  * Get Approval Matrix configuration for Department/SubDepartment
+ * ⚡ OPTIMIZED: Uses OR condition and raw query for performance
  */
 async function getApprovalMatrix(departmentId, subDepartmentId) {
   try {
@@ -13,42 +14,18 @@ async function getApprovalMatrix(departmentId, subDepartmentId) {
       ? parseInt(subDepartmentId, 10)
       : null;
 
-    let matrix = null;
-    
-    // Try querying with DepartmentId first (if column exists)
-    try {
-      matrix = await db.approvalmatrix.findOne({
-        where: {
-          DepartmentId: deptIdInt,
-          subDepID: subDeptIdInt,
-          Active: true
-        }
-      });
-
-      // Fallback: if no department-specific matrix, allow DepartmentId 0 (global)
-      if (!matrix && deptIdInt !== null) {
-        matrix = await db.approvalmatrix.findOne({
-          where: {
-            DepartmentId: 0,
-            subDepID: subDeptIdInt,
-            Active: true
-          }
-        });
-      }
-    } catch (deptError) {
-      // If DepartmentId column doesn't exist, try querying without it
-      if (deptError.message && (deptError.message.includes('Unknown column') || deptError.message.includes('Invalid column'))) {
-        console.warn('DepartmentId column not found, querying without it');
-        matrix = await db.approvalmatrix.findOne({
-          where: {
-            subDepID: subDeptIdInt,
-            Active: true
-          }
-        });
-      } else {
-        throw deptError;
-      }
-    }
+    // ⚡ OPTIMIZATION: Use OR condition to check both specific and global (0) department
+    // ⚡ NOTE: Ensure index exists on (DepartmentId, subDepID, Active) for fast lookup
+    const matrix = await db.approvalmatrix.findOne({
+      where: {
+        [Op.or]: [
+          { DepartmentId: deptIdInt, subDepID: subDeptIdInt, Active: true },
+          { DepartmentId: 0, subDepID: subDeptIdInt, Active: true }  // Global fallback
+        ]
+      },
+      order: [['DepartmentId', 'DESC']],  // Prefer specific department over global
+      raw: true  // ⚡ Faster query without model instantiation
+    });
 
     return matrix;
   } catch (error) {
@@ -127,45 +104,64 @@ async function getAllApproversByDeptSubDept(departmentId, subDepartmentId) {
 
 /**
  * Create approval requests for a specific level
+ * ⚡ OPTIMIZED: Uses batch user query and bulk insert for performance
  */
-async function createApprovalRequestsForLevel(documentId, linkId, level, requestedBy) {
+async function createApprovalRequestsForLevel(documentId, linkId, level, requestedBy, document = null) {
+  const startTime = Date.now();
+
   try {
-    const document = await db.Documents.findByPk(documentId);
+    // ⚡ OPTIMIZATION: Accept document parameter to avoid redundant fetch
     if (!document) {
-      throw new Error('Document not found');
+      document = await db.Documents.findByPk(documentId, {
+        attributes: {
+          exclude: ['DataImage']  // ⚡ CRITICAL: Exclude BLOB field
+        }
+      });
+      if (!document) {
+        throw new Error('Document not found');
+      }
     }
 
     // Ensure LinkID is a string
     const linkIdStr = String(linkId || document.LinkID || documentId);
 
     const approvers = await getApproversByLevel(document.DepartmentId, document.SubDepartmentId, level);
-    
+
     if (approvers.length === 0) {
       throw new Error(`No approvers found for Level ${level}`);
     }
 
-    const requests = [];
-    for (const approver of approvers) {
-      // Get user details
-      const user = await db.Users.findOne({
-        where: { ID: approver.ApproverID }
-      });
+    // ⚡ OPTIMIZATION: Batch fetch all users at once (fixes N+1 query problem)
+    const userQueryStart = Date.now();
+    const approverIds = approvers.map(a => a.ApproverID);
+    const users = await db.Users.findAll({
+      where: { ID: { [Op.in]: approverIds } },
+      attributes: ['ID', 'UserName'],
+      raw: true
+    });
+    const userMap = Object.fromEntries(users.map(u => [u.ID, u.UserName]));
+    console.log(`⚡[PERF] Batch user query(${approvers.length} users): ${Date.now() - userQueryStart} ms`);
 
-      const approvalRequest = await db.DocumentApprovals.create({
-        DocumentID: documentId,
-        LinkID: linkIdStr,
-        RequestedBy: requestedBy,
-        RequestedDate: new Date(),
-        ApproverID: approver.ApproverID,
-        ApproverName: user ? user.UserName : `User ${approver.ApproverID}`,
-        SequenceLevel: level,
-        Status: 'PENDING',
-        IsCancelled: false
-      });
+    // ⚡ OPTIMIZATION: Prepare all approval data for bulk insert
+    const currentDate = new Date();
+    const approvalData = approvers.map(approver => ({
+      DocumentID: documentId,
+      LinkID: linkIdStr,
+      RequestedBy: requestedBy,
+      RequestedDate: currentDate,
+      ApproverID: approver.ApproverID,
+      ApproverName: userMap[approver.ApproverID] || `User ${approver.ApproverID} `,
+      SequenceLevel: level,
+      Status: 'PENDING',
+      IsCancelled: false
+    }));
 
-      requests.push(approvalRequest);
-    }
+    // ⚡ OPTIMIZATION: Single bulk insert instead of sequential creates
+    const bulkInsertStart = Date.now();
+    const requests = await db.DocumentApprovals.bulkCreate(approvalData);
+    console.log(`⚡[PERF] Bulk insert(${approvalData.length} records): ${Date.now() - bulkInsertStart} ms`);
 
+    console.log(`⚡[PERF] Total createApprovalRequestsForLevel: ${Date.now() - startTime} ms`);
     return requests;
   } catch (error) {
     console.error('Error creating approval requests:', error);
@@ -208,7 +204,7 @@ async function getOrCreateTracking(documentId, linkId, departmentId, subDepartme
   try {
     // Ensure LinkID is a string
     const linkIdStr = String(linkId || documentId);
-    
+
     let tracking = await db.DocumentApprovalTracking.findOne({
       where: { DocumentID: documentId, LinkID: linkIdStr }
     });
@@ -263,22 +259,26 @@ async function updateTracking(documentId, updates) {
 async function moveToNextLevel(documentId, linkId, currentLevel, requestedBy) {
   try {
     const nextLevel = currentLevel + 1;
-    const document = await db.Documents.findByPk(documentId);
-    
+    const document = await db.Documents.findByPk(documentId, {
+      attributes: {
+        exclude: ['DataImage']  // ⚡ CRITICAL: Exclude BLOB field
+      }
+    });
+
     if (!document) {
       throw new Error('Document not found');
     }
 
     // Check if there are approvers for next level
     const approvers = await getApproversByLevel(document.DepartmentId, document.SubDepartmentId, nextLevel);
-    
+
     if (approvers.length === 0) {
       // No more levels, all levels completed
       return { hasNextLevel: false, level: nextLevel };
     }
 
-    // Create requests for next level
-    await createApprovalRequestsForLevel(documentId, linkId, nextLevel, requestedBy);
+    // Create requests for next level (pass document to avoid redundant fetch)
+    await createApprovalRequestsForLevel(documentId, linkId, nextLevel, requestedBy, document);
 
     // Update tracking
     await updateTracking(documentId, {
@@ -307,14 +307,18 @@ async function checkAllLevelsCompleted(documentId) {
     }
 
     // Get all level decisions to verify all levels have been decided
-    const document = await db.Documents.findByPk(documentId);
+    const document = await db.Documents.findByPk(documentId, {
+      attributes: {
+        exclude: ['DataImage']  // ⚡ CRITICAL: Exclude BLOB field
+      }
+    });
     if (!document) {
       return false;
     }
 
     const levelDecisions = await getAllLevelDecisions(documentId, document.LinkID);
     const decidedLevels = Object.keys(levelDecisions).length;
-    
+
     return decidedLevels >= tracking.TotalLevels;
   } catch (error) {
     console.error('Error checking levels completed:', error);
@@ -331,7 +335,7 @@ async function getAllLevelDecisions(documentId, linkId) {
     // ⚡ OPTIMIZATION: Handle LinkID type using OR condition
     const linkIdStr = String(linkId);
     const linkIdNum = isNaN(linkId) ? null : parseInt(linkId);
-    
+
     // ⚡ OPTIMIZATION: Single query with OR condition
     const approvals = await db.DocumentApprovals.findAll({
       where: {
@@ -422,7 +426,7 @@ async function getApprovalStatus(documentId, linkId) {
     // ⚡ OPTIMIZATION: Handle LinkID type (string or number) using OR condition
     const linkIdStr = String(linkId);
     const linkIdNum = isNaN(linkId) ? null : parseInt(linkId);
-    
+
     // ⚡ OPTIMIZATION: Fetch tracking and approvals in parallel using OR condition
     const [tracking, allApprovals] = await Promise.all([
       // Fetch tracking with OR condition for LinkID
@@ -435,7 +439,7 @@ async function getApprovalStatus(documentId, linkId) {
         },
         raw: false // Keep as model instance for easier access
       }).catch(() => null),
-      
+
       // Fetch all approvals with OR condition for LinkID
       db.DocumentApprovals.findAll({
         where: {
@@ -468,13 +472,13 @@ async function getApprovalStatus(documentId, linkId) {
     // ⚡ OPTIMIZATION: Build level details efficiently
     const levelDetails = {};
     const totalLevels = tracking.TotalLevels || 0;
-    
+
     if (totalLevels > 0 && Number.isInteger(totalLevels)) {
       for (let level = 1; level <= totalLevels; level++) {
         const levelApprovals = Array.isArray(allApprovals)
           ? allApprovals.filter(a => a && a.SequenceLevel === level)
           : [];
-        
+
         levelDetails[level] = {
           level: level,
           decision: levelDecisions[level] || 'PENDING',

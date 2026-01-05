@@ -8,13 +8,13 @@ const fsPromises = require('fs').promises;
 const { spawn } = require('child_process');
 const router = express.Router();
 const db = require('../config/database');
-const { checkUserPermission, diagnosePermissionIssue } = require('../utils/checkPermission'); 
+const { checkUserPermission, diagnosePermissionIssue } = require('../utils/checkPermission');
 const DocumentApprovers = db.DocumentApprovers;
 const { calculatePageCount } = require('../utils/calculatePageCount');
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
-const bluritout=require("../utils/blurFile")
-const convertPdfBufferToImages=require("../utils/pdftoimages_1")
+const bluritout = require("../utils/blurFile")
+const convertPdfBufferToImages = require("../utils/pdftoimages_1")
 // const storage = multer.diskStorage({
 //   destination: function (req, file, cb) {
 //     cb(null, 'uploads/'); // Folder to save files
@@ -30,8 +30,8 @@ const upload = multer({ storage: storage });
 const requireAuth = require('../middleware/requireAuth');
 const { raw } = require('mysql2');
 const Department = db.Department;
-const SubDepartment= db.SubDepartment
-const AssignSubDepartment=db.AssignSubDepartment
+const SubDepartment = db.SubDepartment
+const AssignSubDepartment = db.AssignSubDepartment
 const Documents = db.Documents;
 const Fields = db.Fields;
 const pdf2pic = require('pdf2pic');
@@ -65,16 +65,16 @@ function parseVersion(versionString) {
   if (!versionString || typeof versionString !== 'string') {
     return { major: 1, minor: null };
   }
-  
+
   // Remove 'v' prefix (case insensitive)
   const version = versionString.replace(/^v/i, '');
-  
+
   // Split by dot
   const parts = version.split('.');
-  
+
   const major = parseInt(parts[0], 10) || 1;
   const minor = parts.length > 1 ? parseInt(parts[1], 10) : null;
-  
+
   return { major, minor };
 }
 
@@ -90,17 +90,17 @@ function incrementVersion(currentVersion, isMinorVersion, finalize) {
   console.log('  - currentVersion:', currentVersion);
   console.log('  - isMinorVersion:', isMinorVersion, '(type:', typeof isMinorVersion, ')');
   console.log('  - finalize:', finalize, '(type:', typeof finalize, ')');
-  
+
   const { major, minor } = parseVersion(currentVersion);
   console.log('  - Parsed: major=', major, ', minor=', minor);
-  
+
   // Finalize takes priority: bump major, reset minor
   if (finalize) {
     const result = `v${major + 1}`;
     console.log('  - Finalize=true, returning:', result);
     return result;
   }
-  
+
   // Minor version: increment minor, or create .1 if none exists
   if (isMinorVersion) {
     let result;
@@ -112,7 +112,7 @@ function incrementVersion(currentVersion, isMinorVersion, finalize) {
     console.log('  - isMinorVersion=true, returning:', result);
     return result;
   }
-  
+
   // Default: treat as minor version (backward compatibility)
   // This ensures existing code without flags still works
   let result;
@@ -161,7 +161,7 @@ async function saveVersionFile(linkId, versionNumber, fileBuffer, dataType) {
 
     // Clean version number for filename (remove dots, keep only alphanumeric and underscore)
     const cleanVersion = versionNumber.replace(/[^a-zA-Z0-9_]/g, '_');
-    
+
     // Generate filename: document_{LinkID}_v{VersionNumber}.{ext}
     const filename = `document_${linkId}_v${cleanVersion}.${extension}`;
     const filepath = path.join(uploadsDir, filename);
@@ -171,7 +171,7 @@ async function saveVersionFile(linkId, versionNumber, fileBuffer, dataType) {
 
     // Return relative path for database storage
     const relativePath = `/uploads/documents/${filename}`;
-    
+
     console.log(`✅ [saveVersionFile] Saved version file: ${relativePath}`);
     return relativePath;
   } catch (error) {
@@ -202,7 +202,7 @@ async function getVersionFilePath(linkId, versionNumber, documentId, storedFilep
     const cleanVersion = versionNumber.replace(/[^a-zA-Z0-9_]/g, '_');
     const filename = `document_${linkId}_v${cleanVersion}.pdf`; // Default to PDF
     const filepath = path.join(__dirname, '../public/uploads/documents', filename);
-    
+
     // Quick check for PDF (most common)
     if (fs.existsSync(filepath)) {
       const baseUrl = process.env.BASE_URL || '';
@@ -223,32 +223,32 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
   const restrictions_open_draw = restrictions.map(r => r.dataValues);
 
   const docJson = doc.toJSON();
-  const timestampfocdocumentlinkid=new Date().getTime()+"_"+doc.LinkID
-  
+  const timestampfocdocumentlinkid = new Date().getTime() + "_" + doc.LinkID
+
   console.log("Processing document ID:", doc.ID, "SkipCache:", skipCache)
   const dir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
-  const temppath=path.join(__dirname, `../public/images/nonredacteddocs/document_${doc.ID}`)
-  const pathrelativetoserver=`document_${doc.ID}`
+  const temppath = path.join(__dirname, `../public/images/nonredacteddocs/document_${doc.ID}`)
+  const pathrelativetoserver = `document_${doc.ID}`
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (!fs.existsSync(temppath)) fs.mkdirSync(temppath, { recursive: true });
-  
+
   const isRestricted = restrictions.some(r => r.DocumentID === doc.ID);
   const matchedField = OCRFields.find(field => field.LinkId === doc.LinkID);
   const templateId = matchedField ? matchedField.template_id : null;
-  
+
   // ⚡ OPTIMIZATION: Only check cache if not forced to skip
   if (!skipCache) {
     // Check if images already exist (cached)
     const existingFiles = fs.existsSync(temppath) ? fs.readdirSync(temppath) : [];
     const hasCachedImage = existingFiles.length > 0;
-    
+
     // console.log("Cached image exists:", hasCachedImage, "Files:", existingFiles.length);
 
     // ⚡ OPTIMIZATION: Early exit - if cached image exists and no restrictions, use cache
     if (hasCachedImage && !isRestricted && !templateId) {
       const latestFile = existingFiles.sort().reverse()[0];
       const cachedUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
-      
+
       delete docJson.DataImage;
       return {
         ...docJson,
@@ -258,14 +258,14 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
         restrictions: []
       };
     }
-    
+
     // ⚡ OPTIMIZATION: If cached image exists, use it (for restriction checking)
     if (hasCachedImage) {
       const latestFile = existingFiles.sort().reverse()[0];
-      
+
       // Check if redacted version exists
       const redactedFiles = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
-      
+
       let fileUrl = '';
       if (isRestricted && redactedFiles.length > 0) {
         const redactedFile = redactedFiles.sort().reverse()[0];
@@ -273,7 +273,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
       } else {
         fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
       }
-      
+
       delete docJson.DataImage;
       return {
         ...docJson,
@@ -306,7 +306,7 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     // If no cache and no DataImage, return error
     throw new Error(`No image data available and no cached images for document ID: ${doc.ID}`);
   }
-  
+
   let imageBuffer = doc.DataImage;
   let fileUrl = '';
 
@@ -327,33 +327,33 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
 
   if (doc.DataType === '.pdf' || doc.DataType === 'pdf') {
     const imageConversion = await convertPdfBufferToImages(
-        doc.DataImage,
-        temppath,
-        timestampfocdocumentlinkid
+      doc.DataImage,
+      temppath,
+      timestampfocdocumentlinkid
     );
 
     // ✅ Extra safeguard: ensure we got at least one image
     if (!imageConversion || !imageConversion.buffer || imageConversion.buffer.length === 0) {
-        // throw new Error(
-        //     `No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`
-        // );
-        throw new Error(`No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`);
-        // console.warn(`No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`);
-        // return null;
+      // throw new Error(
+      //     `No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`
+      // );
+      throw new Error(`No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`);
+      // console.warn(`No PNG images generated from PDF at ${temppath}/${timestampfocdocumentlinkid}`);
+      // return null;
     }
 
     imageBuffer = imageConversion.buffer;
     const filename = imageConversion.file;
     fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${filename}`;
   } else {
-      // ✅ Extra safeguard: ensure non-PDF docs have image data
-      if (!doc.DataImage || doc.DataImage.length === 0) {
-          throw new Error(`No image data provided for non-PDF document at ${temppath}`);
-      }
+    // ✅ Extra safeguard: ensure non-PDF docs have image data
+    if (!doc.DataImage || doc.DataImage.length === 0) {
+      throw new Error(`No image data provided for non-PDF document at ${temppath}`);
+    }
 
-      const filePath = path.join(temppath, `${timestampfocdocumentlinkid}.png`);
-      fs.writeFileSync(filePath, doc.DataImage);
-      fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${timestampfocdocumentlinkid}.png`;
+    const filePath = path.join(temppath, `${timestampfocdocumentlinkid}.png`);
+    fs.writeFileSync(filePath, doc.DataImage);
+    fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${timestampfocdocumentlinkid}.png`;
   }
 
 
@@ -371,24 +371,24 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     const mergedArray_blur = [...restrictions_open_draw, ...blurRegions];
 
     // console.log(mergedArray_blur);
-    const arethereblurRegions=blurRegions.length
+    const arethereblurRegions = blurRegions.length
     // console.log("arethereblurRegions",arethereblurRegions)
     let blurredFilename = undefined
-    try{
-      blurredFilename=await bluritout(imageBuffer, 'output.png', temppath, mergedArray_blur,pathrelativetoserver,dir);
-      
-    }catch(e){
+    try {
+      blurredFilename = await bluritout(imageBuffer, 'output.png', temppath, mergedArray_blur, pathrelativetoserver, dir);
+
+    } catch (e) {
 
     }
-    fileUrl = arethereblurRegions&&blurredFilename?`${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${blurredFilename}`:fileUrl
+    fileUrl = arethereblurRegions && blurredFilename ? `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${blurredFilename}` : fileUrl
     // console.log("blurredFilename",blurredFilename)
   }
-// console.log("Final fileUrl:", fileUrl, "DataImage size:", doc.DataImage?.length || 0);
-  
+  // console.log("Final fileUrl:", fileUrl, "DataImage size:", doc.DataImage?.length || 0);
+
   if (!fileUrl) {
     console.error("ERROR: fileUrl is empty for document ID:", doc.ID);
   }
-  
+
   delete docJson.DataImage;
 
   const result = {
@@ -398,9 +398,9 @@ async function processDocument(doc, restrictions, OCRFields, templates, skipCach
     template_id: templateId,
     restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
   };
-  
+
   console.log("Returning document with filepath:", result.filepath);
-  
+
   return result;
 }
 
@@ -465,8 +465,8 @@ const loadSubDepartment = async (id, subid) => {
   const departmentName = department ? department.Name : 'Unknown';
 
   const subdepartments = await SubDepartment.findAll({ where: { Active: true } });
-  const assignSubDeps = await AssignSubDepartment.findAll({ 
-    where: { DepartmentID: id, Active: true } 
+  const assignSubDeps = await AssignSubDepartment.findAll({
+    where: { DepartmentID: id, Active: true }
   });
 
   const newSubDepts = [];
@@ -493,8 +493,8 @@ const loadSubDepartment = async (id, subid) => {
 };
 
 const loadDocuments = async (linkid) => {
-  const documents = await Documents.findAll({ 
-    where: { LinkID: linkid, Active: true } 
+  const documents = await Documents.findAll({
+    where: { LinkID: linkid, Active: true }
   });
   return { documents, linkid: linkid.toString() };
 };
@@ -506,22 +506,22 @@ router.get('/', async (req, res) => {
     if (assSubDep && id && assSubDep !== '[]') {
       const departments = await Department.findAll({ where: { Active: true } });
       const subdepartments = JSON.parse(assSubDep);
-      const department = await Department.findOne({ 
-        where: { Active: true, ID: parseInt(id) } 
+      const department = await Department.findOne({
+        where: { Active: true, ID: parseInt(id) }
       });
 
       if (parseInt(subid) !== 0) {
-        const documents = await db.AssignSubdepartment.findOne({ 
-          where: { 
-            DepartmentID: parseInt(id), 
-            SubDepartmentID: parseInt(subid), 
-            Active: true 
-          } 
+        const documents = await db.AssignSubdepartment.findOne({
+          where: {
+            DepartmentID: parseInt(id),
+            SubDepartmentID: parseInt(subid),
+            Active: true
+          }
         });
         const subdepartment = await SubDepartment.findOne({ where: { ID: parseInt(subid) } });
 
         const docData = await loadDocuments(documents ? documents.LinkID : 0);
-        
+
         res.render('documents/index', {
           departments,
           subdepartments,
@@ -533,16 +533,16 @@ router.get('/', async (req, res) => {
           linkid: docData.linkid
         });
       } else {
-        const documents = await AssignSubdepartment.findOne({ 
-          where: { 
-            DepartmentID: parseInt(id), 
-            SubDepartmentID: subdepartments[0].ID, 
-            Active: true 
-          } 
+        const documents = await AssignSubdepartment.findOne({
+          where: {
+            DepartmentID: parseInt(id),
+            SubDepartmentID: subdepartments[0].ID,
+            Active: true
+          }
         });
 
         const docData = await loadDocuments(documents ? documents.LinkID : 0);
-        
+
         res.render('documents/index', {
           departments,
           subdepartments,
@@ -566,7 +566,7 @@ router.get('/', async (req, res) => {
 router.get('/department/:id/:subid', async (req, res) => {
   try {
     const { id, subid } = req.params;
-    
+
     if (id && parseInt(id) !== 0) {
       const subDeptData = await loadSubDepartment(parseInt(id), parseInt(subid) || 0);
       Object.assign(req.session, subDeptData);
@@ -590,23 +590,23 @@ router.get('/view-document/:linkid/:id/alert/depname/subdepname', async (req, re
     const { linkid, id, alert, depname, subdepname } = req.params;
 
     if (linkid) {
-      const fields = await Fields.findAll({ 
-        where: { LinkID: parseInt(linkid), Active: true } 
-      });
-      
-      const selectedDocument = await Documents.findOne({ 
-        where: { 
-          ID: parseInt(id), 
-          LinkID: parseInt(linkid), 
-          Active: true 
-        } 
+      const fields = await Fields.findAll({
+        where: { LinkID: parseInt(linkid), Active: true }
       });
 
-      const attachments = await Attachment.findAll({ 
-        where: { LinkID: parseInt(id) } 
+      const selectedDocument = await Documents.findOne({
+        where: {
+          ID: parseInt(id),
+          LinkID: parseInt(linkid),
+          Active: true
+        }
       });
 
-      res.json( {
+      const attachments = await Attachment.findAll({
+        where: { LinkID: parseInt(id) }
+      });
+
+      res.json({
         fields,
         document: selectedDocument,
         attachments,
@@ -639,36 +639,36 @@ router.get('/view-document/:linkid/:id/alert/depname/subdepname', async (req, re
 //   res.redirect('/documents/view-document');
 // });
 
-router.post('/editold',upload.single('file'),requireAuth, async (req, res) => {
+router.post('/editold', upload.single('file'), requireAuth, async (req, res) => {
   try {
     const {
       filename, filedate, Text1, Date1, Text2, Date2, Text3, Date3,
       Text4, Date4, Text5, Date5, Text6, Date6, Text7, Date7,
       Text8, Date8, Text9, Date9, Text10, Date10,
       expiration, confidential, expdate, remarks, id, dep,
-subdep,publishing_status,FileDescription,
-Description
+      subdep, publishing_status, FileDescription,
+      Description
     } = req.body;
-   
+
     const buffer = req.file ? req.file.buffer : null;
-    
+
 
     const expirationChecked = expiration === 'true';
     const confidentialChecked = confidential === 'true';
-    const document=await db.Documents.findByPk(id)
-    const linkid=document.LinkID
+    const document = await db.Documents.findByPk(id)
+    const linkid = document.LinkID
     // Validate expiration date
     if (expirationChecked) {
       const parsedExpDate = new Date(expdate);
       if (isNaN(parsedExpDate.getTime()) || parsedExpDate <= new Date()) {
-       return res.json({
+        return res.json({
           status: false,
           message: 'Please Enter a Valid Expiration Date'
-      });
+        });
+      }
     }
-  }
 
-    const records = await Documents.findAll({ where: { LinkID: parseInt(linkid) },order: [['CreatedDate', 'DESC']] });
+    const records = await Documents.findAll({ where: { LinkID: parseInt(linkid) }, order: [['CreatedDate', 'DESC']] });
     const record = records[0]; // Get the most recent record for the given LinkID
     await db.Documents.update({ Active: false }, { where: { LinkID: parseInt(linkid) } }); // Marks all records as inactive
     //marks all records as inactive
@@ -677,7 +677,7 @@ Description
         status: false,
         message: 'No records found for the given LinkID.'
       });
-    
+
     }
 
     // Helper function to parse date or return null
@@ -694,63 +694,63 @@ Description
 
     // Update record
     await record.update({
-      Active:false
+      Active: false
     });
 
     //create a new document
-    const newdoc=await db.Documents.create(
+    const newdoc = await db.Documents.create(
       {
-      LinkID: record.LinkID,
-      Createdby: req.user.userName,
-      CreatedDate: new Date(),
-      DataImage:buffer?buffer:record.DataImage,
-      DataType: req.file ? req.file.mimetype?(req.file.mimetype.split("/")[1]):"" : record.DataType,
-      Active: true,
-       DepartmentId: parseInt(dep),
-      SubDepartmentId: parseInt(subdep),
-      // Add the fields that are being updated
-      FileName: filename,
-      FileDate: parseDate(filedate),
-      Text1: Text1,
-      Date1: parseDate(Date1),
-      Text2: Text2,
-      Date2: parseDate(Date2),
-      Text3: Text3,
-      Date3: parseDate(Date3),
-      Text4: Text4,
-      publishing_status:publishing_status,
-      Date4: parseDate(Date4),
-      Text5: Text5,
-      Date5: parseDate(Date5),
-      Text6: Text6,
-      Date6: parseDate(Date6),
-      Text7: Text7,
-      Date7: parseDate(Date7),
-      Text8: Text8,
-      Date8: parseDate(Date8),
-      Text9: Text9,
-      Date9: parseDate(Date9),
-      Text10: Text10,
-      Date10: parseDate(Date10),
-      Expiration: expirationChecked,
-      Confidential: confidentialChecked,
-      ...(expirationChecked&&{ExpirationDate:new Date(expdate)}),
-      PageCount: pageCount,
-      Remarks: remarks,
-      FileDescription,
-      Description
-    }
+        LinkID: record.LinkID,
+        Createdby: req.user.userName,
+        CreatedDate: new Date(),
+        DataImage: buffer ? buffer : record.DataImage,
+        DataType: req.file ? req.file.mimetype ? (req.file.mimetype.split("/")[1]) : "" : record.DataType,
+        Active: true,
+        DepartmentId: parseInt(dep),
+        SubDepartmentId: parseInt(subdep),
+        // Add the fields that are being updated
+        FileName: filename,
+        FileDate: parseDate(filedate),
+        Text1: Text1,
+        Date1: parseDate(Date1),
+        Text2: Text2,
+        Date2: parseDate(Date2),
+        Text3: Text3,
+        Date3: parseDate(Date3),
+        Text4: Text4,
+        publishing_status: publishing_status,
+        Date4: parseDate(Date4),
+        Text5: Text5,
+        Date5: parseDate(Date5),
+        Text6: Text6,
+        Date6: parseDate(Date6),
+        Text7: Text7,
+        Date7: parseDate(Date7),
+        Text8: Text8,
+        Date8: parseDate(Date8),
+        Text9: Text9,
+        Date9: parseDate(Date9),
+        Text10: Text10,
+        Date10: parseDate(Date10),
+        Expiration: expirationChecked,
+        Confidential: confidentialChecked,
+        ...(expirationChecked && { ExpirationDate: new Date(expdate) }),
+        PageCount: pageCount,
+        Remarks: remarks,
+        FileDescription,
+        Description
+      }
     )
 
 
 
-    let versionNumber =`v`+1;
+    let versionNumber = `v` + 1;
     prevVersion = await db.DocumentVersions.findOne({
       where: { DocumentID: record.ID, IsCurrentVersion: true }
     });
     if (prevVersion) {
       // Mark previous version as not current
-      await prevVersion.update({ IsCurrentVersion: false,Active:false });
+      await prevVersion.update({ IsCurrentVersion: false, Active: false });
       // Extract version number from previous version
       const versionMatch = prevVersion.VersionNumber.match(/v(\d+)/);
       if (versionMatch) {
@@ -758,7 +758,7 @@ Description
       }
     }
     console.log('Version Number:', versionNumber);
-    
+
     // Save version file to disk
     let versionFilepath = null;
     try {
@@ -775,7 +775,7 @@ Description
     } catch (fileError) {
       console.error('❌ [EDITOLD] Error saving version file:', fileError);
     }
-    
+
     await db.DocumentVersions.create({
       LinkID: record.LinkID,
       DocumentID: newdoc.ID,
@@ -801,18 +801,18 @@ Description
       FileDescription,
       Description
     });
-      const smalldocwithoutfilebuffer=JSON.parse(JSON.stringify(newdoc))
-      delete smalldocwithoutfilebuffer.DataImage
+    const smalldocwithoutfilebuffer = JSON.parse(JSON.stringify(newdoc))
+    delete smalldocwithoutfilebuffer.DataImage
     await logAuditTrail(record.ID, 'UPDATED', req.user.id, record, JSON.stringify(smalldocwithoutfilebuffer), req, linkid);
-    await logCollaboratorActivity(newdoc.ID, req.user.id, 'DOCUMENT_EDITED', req,JSON.stringify(smalldocwithoutfilebuffer), linkid);
-   return res.json({
+    await logCollaboratorActivity(newdoc.ID, req.user.id, 'DOCUMENT_EDITED', req, JSON.stringify(smalldocwithoutfilebuffer), linkid);
+    return res.json({
       status: true,
       message: 'Document updated successfully.',
-   });
+    });
   } catch (error) {
     console.error('Error updating document:', error);
-   return res.json({
-      status: false,  
+    return res.json({
+      status: false,
       message: `An error occurred while updating the document: ${error.message}`
     });
   }
@@ -824,7 +824,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     // ============================================
     console.log('🚀🚀🚀 [NEW EDIT ENDPOINT] Request received - NEW VERSIONING CODE ACTIVE 🚀🚀🚀');
     console.log('🚀 [EDIT ENDPOINT] req.body keys:', Object.keys(req.body));
-    
+
     // Safely log req.body (avoid circular references and buffers)
     const safeBody = {};
     Object.keys(req.body).forEach(key => {
@@ -842,10 +842,10 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       }
     });
     console.log('🚀 [EDIT ENDPOINT] req.body (safe):', JSON.stringify(safeBody, null, 2));
-    
-    const { id,dataImage } = req.body;
+
+    const { id, dataImage } = req.body;
     const userId = req.user.id;
-    
+
     // Validate required id field
     if (!id) {
       return res.json({
@@ -855,7 +855,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     }
 
     const buffer = req.file ? req.file.buffer : null;
-    
+
     const document = await db.Documents.findByPk(id);
     if (!document) {
       return res.json({
@@ -863,19 +863,19 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
         message: 'Document not found'
       });
     }
-    
+
     const linkid = document.LinkID;
     const departmentId = document.DepartmentId;
     const subDepartmentId = document.SubDepartmentId;
-    
+
     // Check if user has Edit permission. If missing, log and continue (requested override).
     const hasEditPermission = await checkUserPermission(
-      userId, 
-      departmentId, 
-      subDepartmentId, 
+      userId,
+      departmentId,
+      subDepartmentId,
       'Edit'
     );
-    
+
     if (!hasEditPermission) {
       console.warn(`[DocumentsController] Edit permission missing for user ${userId} in dep ${departmentId}/${subDepartmentId}. Allowing edit per override.`);
     }
@@ -904,8 +904,8 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       isMinorVersion !== undefined &&
       isMinorVersion !== null &&
       (
-        isMinorVersion === 'true' || 
-        isMinorVersion === true || 
+        isMinorVersion === 'true' ||
+        isMinorVersion === true ||
         String(isMinorVersion).toLowerCase() === 'true'
       )
     );
@@ -913,8 +913,8 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       finalize !== undefined &&
       finalize !== null &&
       (
-        finalize === 'true' || 
-        finalize === true || 
+        finalize === 'true' ||
+        finalize === true ||
         String(finalize).toLowerCase() === 'true'
       )
     );
@@ -937,14 +937,14 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
 
     // ⚡ OPTIMIZATION: Exclude DataImage (BLOB) from initial query - it's huge and slows down the query
     // We'll only fetch DataImage when we actually need it
-    const records = await Documents.findAll({ 
+    const records = await Documents.findAll({
       where: { LinkID: parseInt(linkid) },
       attributes: { exclude: ['DataImage'] }, // ⚡ Don't fetch BLOB - major performance improvement
-      order: [['CreatedDate', 'DESC']] 
+      order: [['CreatedDate', 'DESC']]
     });
-    
+
     const record = records[0]; // Get the most recent record for the given LinkID
-    
+
     if (!records || records.length === 0) {
       return res.json({
         status: false,
@@ -988,7 +988,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
         fileDataImage = oldRecord?.DataImage || null;
       }
     }
-    
+
     const updateData = {
       LinkID: record.LinkID,
       Createdby: req.user.userName,
@@ -1044,20 +1044,20 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     // Note: LinkID might be stored as string or number, so try both
     const linkidStr = String(linkid);
     const linkidNum = parseInt(linkid);
-    
+
     console.log('🔍 [VERSION DEBUG] LinkID types:', {
       original: linkid,
       type: typeof linkid,
       asString: linkidStr,
       asNumber: linkidNum
     });
-    
+
     // Try to find version by LinkID (try both string and number)
     let prevVersion = await db.DocumentVersions.findOne({
       where: { LinkID: linkidStr, IsCurrentVersion: true },
       order: [['ModificationDate', 'DESC']]
     });
-    
+
     // If not found, try with number
     if (!prevVersion && !isNaN(linkidNum)) {
       prevVersion = await db.DocumentVersions.findOne({
@@ -1065,7 +1065,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
         order: [['ModificationDate', 'DESC']]
       });
     }
-    
+
     // DEBUG: Log previous version info
     console.log('🔍 [VERSION DEBUG] Previous version lookup:');
     console.log('  - LinkID:', linkid);
@@ -1073,24 +1073,24 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     if (prevVersion) {
       console.log('  - Previous version number:', prevVersion.VersionNumber);
     }
-    
+
     if (prevVersion) {
       // Mark previous version as not current
       await prevVersion.update({ IsCurrentVersion: false, Active: false });
-      
+
       // DEBUG: Log before version calculation
       console.log('🔍 [VERSION DEBUG] Calculating new version:');
       console.log('  - Current version:', prevVersion.VersionNumber);
       console.log('  - isMinorVersionFlag:', isMinorVersionFlag);
       console.log('  - finalizeFlag:', finalizeFlag);
-      
+
       // Calculate new version using helper function
       versionNumber = incrementVersion(
         prevVersion.VersionNumber,
         isMinorVersionFlag,
         finalizeFlag
       );
-      
+
       // DEBUG: Log after version calculation
       console.log('🔍 [VERSION DEBUG] Calculated new version:', versionNumber);
     } else {
@@ -1144,7 +1144,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
     console.log('  - LinkID:', record.LinkID);
     console.log('  - DocumentID:', newdoc.ID);
     console.log('  - VersionNumber:', versionNumber);
-    
+
     // ⚡ OPTIMIZATION: Create version record first, then save file in background (non-blocking)
     const versionRecord = await db.DocumentVersions.create({
       LinkID: record.LinkID,
@@ -1160,7 +1160,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
       FileDescription: getValue(FileDescription, record.FileDescription),
       Description: getValue(Description, record.Description)
     });
-    
+
     // ⚡ OPTIMIZATION: Save version file in background (non-blocking) - don't wait for it
     // This speeds up the upload response significantly
     (async () => {
@@ -1174,7 +1174,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
             dataType
           );
           console.log('✅ [VERSION DEBUG] Version file saved:', versionFilepath);
-          
+
           // Update version record with filepath after file is saved
           await versionRecord.update({ Filepath: versionFilepath });
         } else {
@@ -1185,7 +1185,7 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
         // Continue even if file save fails (backward compatibility)
       }
     })().catch(err => console.error('Background file save error:', err));
-    
+
     console.log('✅ [VERSION DEBUG] Version record created:', {
       ID: versionRecord.ID,
       VersionNumber: versionRecord.VersionNumber,
@@ -1194,10 +1194,10 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
 
     const smalldocwithoutfilebuffer = JSON.parse(JSON.stringify(newdoc));
     delete smalldocwithoutfilebuffer.DataImage;
-    
+
     await logAuditTrail(record.ID, 'UPDATED', req.user.id, record, JSON.stringify(smalldocwithoutfilebuffer), req, linkid);
     await logCollaboratorActivity(newdoc.ID, req.user.id, 'DOCUMENT_EDITED', req, JSON.stringify(smalldocwithoutfilebuffer), linkid);
-    
+
     return res.json({
       status: true,
       message: 'Document updated successfully.',
@@ -1214,19 +1214,19 @@ router.post('/edit', upload.single('file'), requireAuth, async (req, res) => {
 
 
 
-router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
+router.post('/create', requireAuth, upload.single('file'), async (req, res) => {
   // This is identical to the edit POST route in the original controller
   // You may want to modify this to actually create new documents
   try {
     const userId = req.user.id;
     const {
-       Text1, Date1, Text2, Date2, Text3, Date3,
+      Text1, Date1, Text2, Date2, Text3, Date3,
       Text4, Date4, Text5, Date5, Text6, Date6, Text7, Date7,
       Text8, Date8, Text9, Date9, Text10, Date10,
-      expiration, confidential, expdate, remarks, id, dep, subdep, publishing_status,FileDescription,
-      Description,filename
+      expiration, confidential, expdate, remarks, id, dep, subdep, publishing_status, FileDescription,
+      Description, filename
     } = req.body;
-    
+
     // Validate required fields
     if (!dep || !subdep) {
       return res.json({
@@ -1234,42 +1234,42 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
         message: 'Department and SubDepartment are required'
       });
     }
-    
+
     const departmentId = parseInt(dep);
     const subDepartmentId = parseInt(subdep);
-    
+
     // Check if user has Add permission. If missing, log and continue (requested override).
     const hasAddPermission = await checkUserPermission(
-      userId, 
-      departmentId, 
-      subDepartmentId, 
+      userId,
+      departmentId,
+      subDepartmentId,
       'Add'
     );
-    
+
     if (!hasAddPermission) {
       console.warn(`[DocumentsController] Add permission missing for user ${userId} in dep ${departmentId}/${subDepartmentId}. Allowing upload per override.`);
     }
     // const filename= req.file ? req.file.originalname : "";
     const buffer = req.file ? req.file.buffer : null;
-    const filedate= req.file ? new Date() : new Date();
+    const filedate = req.file ? new Date() : new Date();
     const expirationChecked = expiration === 'true';
     const confidentialChecked = confidential === 'true';
-    const linkid=generateLinkID();
-    console.log("buffer",buffer)
+    const linkid = generateLinkID();
+    console.log("buffer", buffer)
     if (!buffer) {
       return res.json({
-            status:false,
-            message: 'Please Attache a Valid File'
-        });
+        status: false,
+        message: 'Please Attache a Valid File'
+      });
     }
     // Validate expiration date
     if (expirationChecked) {
       const parsedExpDate = new Date(expdate);
       if (isNaN(parsedExpDate.getTime()) || parsedExpDate <= new Date()) {
-       
+
         return res.json({
-            status:false,
-            message: 'Please Enter a Valid Expiration Date'
+          status: false,
+          message: 'Please Enter a Valid Expiration Date'
         });
       }
     }
@@ -1280,12 +1280,12 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
       const parsed = new Date(dateStr);
       return isNaN(parsed.getTime()) ? null : parsed;
     };
-    const newexpdate=expdate?expdate:new Date()+ 8541*30*24*60*60*1000
-    
+    const newexpdate = expdate ? expdate : new Date() + 8541 * 30 * 24 * 60 * 60 * 1000
+
     // Calculate page count
     const mimeType = req.file ? req.file.mimetype : 'application/octet-stream';
     const pageCount = await calculatePageCount(buffer, mimeType);
-    
+
     // Create new document
     const newDocument = await Documents.create({
       DepartmentId: parseInt(dep),
@@ -1318,32 +1318,32 @@ router.post('/create',requireAuth,upload.single('file'), async (req, res) => {
       Confidential: confidentialChecked,
       ExpirationDate: new Date(newexpdate),
       Remarks: remarks,
-      publishing_status:publishing_status,
+      publishing_status: publishing_status,
       Active: true,
-      DataType: req.file ? req.file.mimetype?(req.file.mimetype.split("/")[1]):"" : 'octet-stream',
+      DataType: req.file ? req.file.mimetype ? (req.file.mimetype.split("/")[1]) : "" : 'octet-stream',
       PageCount: pageCount,
       FileDescription,
       Description
     });
 
-     const collabarator=await db.DocumentCollaborations.create({
+    const collabarator = await db.DocumentCollaborations.create({
       DocumentID: newDocument.ID,
       CollaboratorID: req.user.id,
-      LinkID:linkid,
+      LinkID: linkid,
       CollaboratorName: req.user.userName,
       PermissionLevel: 'ADMIN',
       AddedBy: req.user.id,
       AddedDate: new Date(),
       Active: true
     });
-console.log("req.user",req.user)
-      const smalldocwithoutfilebuffer=JSON.parse(JSON.stringify(newDocument))
-      delete smalldocwithoutfilebuffer.DataImage
-     await db.CollaboratorActivities.create({
+    console.log("req.user", req.user)
+    const smalldocwithoutfilebuffer = JSON.parse(JSON.stringify(newDocument))
+    delete smalldocwithoutfilebuffer.DataImage
+    await db.CollaboratorActivities.create({
       DocumentID: newDocument.ID,
-      LinkID:linkid,
+      LinkID: linkid,
       CollaboratorID: req.user.id,
-      DocumentCollaborationID:collabarator.ID,
+      DocumentCollaborationID: collabarator.ID,
       ActivityType: 'DOCUMENT_OPENED',
       ActivityDate: new Date(),
       ActivityDetails: JSON.stringify(smalldocwithoutfilebuffer),
@@ -1372,7 +1372,7 @@ console.log("req.user",req.user)
 
     await db.DocumentVersions.create({
       DocumentID: newDocument.ID,
-      LinkID:newDocument.LinkID,
+      LinkID: newDocument.LinkID,
       VersionNumber: 'v1',
       ModificationDate: new Date(),
       ModifiedBy: req.user.id,
@@ -1387,25 +1387,25 @@ console.log("req.user",req.user)
     //deativate all docs but current doc
     await db.Documents.update({ Active: false }, { where: { LinkID: newDocument.LinkID, ID: { [Op.ne]: newDocument.ID } } });
     res.json({
-        status: true,
-        message: 'Document created successfully.',
+      status: true,
+      message: 'Document created successfully.',
     });
   } catch (error) {
     console.error('Error creating document:', error);
-   
+
     res.json({
-        status: false,
-        message: `An error occurred while creating the document: ${error.message}`
+      status: false,
+      message: `An error occurred while creating the document: ${error.message}`
     });
   }
 });
-router.delete('/delete/:documentID',requireAuth, async (req, res) => {
+router.delete('/delete/:documentID', requireAuth, async (req, res) => {
   try {
     const { documentID } = req.params;
     const userId = req.user.id;
-    
+
     console.log(`[DELETE /delete/${documentID}] Attempting to delete document. User ID: ${userId}`);
-    
+
     // ⚡ OPTIMIZATION: Exclude DataImage (BLOB) to speed up query - we don't need it for delete
     const documentbypk = await db.Documents.findByPk(documentID, {
       attributes: { exclude: ['DataImage'] } // Skip BLOB data for faster query
@@ -1417,11 +1417,11 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
         message: 'Document not found'
       });
     }
-    
+
     const linkid = documentbypk.LinkID;
     const departmentId = documentbypk.DepartmentId;
     const subDepartmentId = documentbypk.SubDepartmentId;
-    
+
     // COMMENTED OUT: Permission check for Delete - removed 403 Forbidden restriction
     // Check if user has Delete permission
     // const hasDeletePermission = await checkUserPermission(
@@ -1430,7 +1430,7 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
     //   subDepartmentId, 
     //   'Delete'
     // );
-    
+
     // if (!hasDeletePermission) {
     //   // Get diagnostic information to help debug the issue
     //   let diagnostics = null;
@@ -1482,7 +1482,7 @@ router.delete('/delete/:documentID',requireAuth, async (req, res) => {
 
 router.post('/upload-files', upload.array('attach_files'), async (req, res) => {
   try {
-    const { attachmentIDs,DataType } = req.body;
+    const { attachmentIDs, DataType } = req.body;
     const files = req.files;
 
     if (!files || files.length === 0) {
@@ -1538,17 +1538,17 @@ router.post('/delete-attachment', async (req, res) => {
 router.get('/get-attachments/:attachmentIDs', async (req, res) => {
   try {
     const { attachmentIDs } = req.params;
-    
+
     const attachments = await db.Attachment.findAll({
       where: { LinkID: parseInt(attachmentIDs) },
-      
+
     });
 
     const formattedAttachments = attachments.map(a => ({
       id: a.ID,
       dataName: a.DataName,
       dataType: a.DataType,
-      LinkID:a.LinkID
+      LinkID: a.LinkID
     }));
 
     res.json(formattedAttachments);
@@ -1612,7 +1612,7 @@ function getGhostscriptPath() {
 function convertToPdfA(pdfBuffer, originalFileName = 'document.pdf') {
   return new Promise((resolve, reject) => {
     const ghostscriptPath = getGhostscriptPath();
-    
+
     if (!ghostscriptPath) {
       return reject(new Error('Ghostscript is not installed or not found. Please install Ghostscript or set GHOSTSCRIPT_PATH environment variable.'));
     }
@@ -1709,17 +1709,17 @@ function convertToPdfA(pdfBuffer, originalFileName = 'document.pdf') {
 router.get('/convert-to-pdfa/:attachmentID', async (req, res) => {
   try {
     const { attachmentID } = req.params;
-    
+
     const attachment = await db.Attachment.findByPk(parseInt(attachmentID));
     if (!attachment || !attachment.DataImage) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Attachment not found or invalid.',
-        success: false 
+        success: false
       });
     }
 
     const result = await convertToPdfA(attachment.DataImage, attachment.DataName || 'document.pdf');
-    
+
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${result.fileName}"`
@@ -1727,9 +1727,9 @@ router.get('/convert-to-pdfa/:attachmentID', async (req, res) => {
     res.send(result.buffer);
   } catch (error) {
     console.error('Error converting to PDF/A:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || 'PDF/A conversion failed',
-      success: false 
+      success: false
     });
   }
 });
@@ -1743,21 +1743,21 @@ router.get('/convert-to-pdfa/:attachmentID', async (req, res) => {
 router.post('/convert-to-pdfa', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'No file provided. Please upload a PDF file.',
-        success: false 
+        success: false
       });
     }
 
     // Check if file is a PDF
     const fileMimeType = req.file.mimetype || '';
-    const isPdf = fileMimeType === 'application/pdf' || 
-                  req.file.originalname.toLowerCase().endsWith('.pdf');
-    
+    const isPdf = fileMimeType === 'application/pdf' ||
+      req.file.originalname.toLowerCase().endsWith('.pdf');
+
     if (!isPdf) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'File must be a PDF document.',
-        success: false 
+        success: false
       });
     }
 
@@ -1775,9 +1775,9 @@ router.post('/convert-to-pdfa', upload.single('file'), async (req, res) => {
 
   } catch (error) {
     console.error('Error converting to PDF/A:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || 'PDF/A conversion failed',
-      success: false 
+      success: false
     });
   }
 });
@@ -1791,38 +1791,38 @@ router.post('/convert-to-pdfa', upload.single('file'), async (req, res) => {
 router.get('/documents/:documentId/convert-to-pdfa', async (req, res) => {
   try {
     const { documentId } = req.params;
-    
+
     if (!documentId || isNaN(parseInt(documentId))) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid document ID.',
-        success: false 
+        success: false
       });
     }
 
     // Fetch document from database
     const document = await Documents.findOne({
-      where: { 
+      where: {
         ID: parseInt(documentId),
         Active: true
       }
     });
 
     if (!document || !document.DataImage) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Document not found or has no file data.',
-        success: false 
+        success: false
       });
     }
 
     // Check if document is a PDF
-    const isPdf = (document.DataType === '.pdf' || 
-                   document.DataType === 'pdf' ||
-                   (document.FileName && document.FileName.toLowerCase().endsWith('.pdf')));
+    const isPdf = (document.DataType === '.pdf' ||
+      document.DataType === 'pdf' ||
+      (document.FileName && document.FileName.toLowerCase().endsWith('.pdf')));
 
     if (!isPdf) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Document is not a PDF file. PDF/A conversion only works for PDF documents.',
-        success: false 
+        success: false
       });
     }
 
@@ -1839,9 +1839,9 @@ router.get('/documents/:documentId/convert-to-pdfa', async (req, res) => {
 
   } catch (error) {
     console.error('Error converting to PDF/A:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message || 'PDF/A conversion failed',
-      success: false 
+      success: false
     });
   }
 });
@@ -1853,14 +1853,14 @@ router.get('/documents/:documentId/convert-to-pdfa', async (req, res) => {
 router.get('/documents/:userid', async (req, res) => {
   try {
     const { userId, page = 1, limit = 15, search = '', status = 'all' } = req.query;
-    const {userid}=req.params
+    const { userid } = req.params
     // ⚡ FIX: Ensure limit and page are properly parsed as integers
     const parsedLimit = parseInt(limit, 10) || 15;
     const parsedPage = parseInt(page, 10) || 1;
     const offset = (parsedPage - 1) * parsedLimit;
 
     let whereClause = { Active: true };
-    
+
     if (search) {
       whereClause[Op.or] = [
         { DataName: { [Op.like]: `%${search}%` } },
@@ -1868,7 +1868,7 @@ router.get('/documents/:userid', async (req, res) => {
         { Remarks: { [Op.like]: `%${search}%` } }
       ];
     }
-    
+
     // ⚡ OPTIMIZATION: Parallelize independent queries
     const [restrictions, user, approvers, documents] = await Promise.all([
       db.DocumentRestrictions.findAll({
@@ -1890,7 +1890,7 @@ router.get('/documents/:userid', async (req, res) => {
         order: [['CreatedDate', 'DESC']]
       })
     ]);
-    
+
     let userAccess = [];
     try {
       if (user?.userAccessArray) {
@@ -1909,29 +1909,29 @@ router.get('/documents/:userid', async (req, res) => {
           }
         }
       }
-    } catch(e) {
+    } catch (e) {
       console.warn('Error parsing userAccessArray:', e);
       userAccess = [];
     }
-    
+
     const restrictionIds = restrictions.map(r => r.DocumentID);
-    
+
     // ⚡ OPTIMIZATION: Simplified and faster - use IsCurrentVersion flag if available
     const linkIds = documents.rows.map(doc => String(doc.LinkID));
-    
+
     // ⚡ OPTIMIZATION: Fetch only current versions first (fastest), fallback to latest if needed
     const [currentVersions, allApprovals] = await Promise.all([
       linkIds.length > 0 ? db.DocumentVersions.findAll({
-        where: { 
+        where: {
           LinkID: { [Op.in]: linkIds },
           IsCurrentVersion: true
         },
         attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy', 'IsCurrentVersion'],
         raw: true
       }).catch(() => []) : [],
-      
+
       linkIds.length > 0 ? db.DocumentApprovals.findAll({
-        where: { 
+        where: {
           LinkID: { [Op.in]: linkIds },
           RequestedBy: userid
         },
@@ -1941,11 +1941,11 @@ router.get('/documents/:userid', async (req, res) => {
         limit: 1000 // Limit to prevent huge queries
       }).catch(() => []) : []
     ]);
-    
+
     // ⚡ OPTIMIZATION: If some documents don't have IsCurrentVersion, fetch latest for those
     const currentVersionLinkIds = new Set(currentVersions.map(v => String(v.LinkID)));
     const missingLinkIds = linkIds.filter(id => !currentVersionLinkIds.has(id));
-    
+
     // ⚡ OPTIMIZATION: Filter latest versions to only one per LinkID (in memory, fast)
     let latestVersions = [];
     if (missingLinkIds.length > 0) {
@@ -1955,7 +1955,7 @@ router.get('/documents/:userid', async (req, res) => {
         order: [['ModificationDate', 'DESC']],
         raw: true
       }).catch(() => []);
-      
+
       // Filter to only latest per LinkID (fast in-memory operation)
       const latestMap = {};
       allLatest.forEach(v => {
@@ -1966,17 +1966,17 @@ router.get('/documents/:userid', async (req, res) => {
       });
       latestVersions = Object.values(latestMap);
     }
-    
+
     // Combine versions
     const allVersions = [...currentVersions, ...latestVersions];
-    
+
     // ⚡ OPTIMIZATION: Create version map (already filtered)
     const versionMap = {};
     allVersions.forEach(version => {
       const linkId = String(version.LinkID);
       versionMap[linkId] = version;
     });
-    
+
     // ⚡ OPTIMIZATION: Create approval map with latest approval per LinkID
     const approvalMap = {};
     allApprovals.forEach(approval => {
@@ -1985,7 +1985,7 @@ router.get('/documents/:userid', async (req, res) => {
         approvalMap[linkId] = approval;
       }
     });
-    
+
     // ⚡ OPTIMIZATION: Pre-create approver lookup map for O(1) access
     const approverMap = {};
     approvers.forEach(approver => {
@@ -1994,7 +1994,7 @@ router.get('/documents/:userid', async (req, res) => {
         approverMap[key] = approver;
       }
     });
-    
+
     const newdocuments = documents.rows.map(doc => {
       const LinkID = String(doc.LinkID);
       const versions = versionMap[LinkID] || null;
@@ -2006,7 +2006,7 @@ router.get('/documents/:userid', async (req, res) => {
       const newdoc = JSON.parse(JSON.stringify(doc));
       newdoc.approval = approval;
       newdoc.approvalstatus = false;
-      if(approval && approval.Status == "1") {
+      if (approval && approval.Status == "1") {
         newdoc.approvalstatus = true;
       }
       return {
@@ -2016,7 +2016,7 @@ router.get('/documents/:userid', async (req, res) => {
         restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
       };
     });
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -2043,14 +2043,14 @@ router.get('/documents/:userid', async (req, res) => {
 router.get('/alldocuments_old/:userid', async (req, res) => {
   try {
     const { userId, page = 1, limit = 10, search = '', status = 'all' } = req.query;
-    const {userid}=req.params
+    const { userid } = req.params
     // ⚡ FIX: Ensure limit and page are properly parsed as integers
     const parsedLimit = parseInt(limit, 10) || 10;
     const parsedPage = parseInt(page, 10) || 1;
     const offset = (parsedPage - 1) * parsedLimit;
 
     let whereClause = { Active: true };
-    
+
     if (search) {
       whereClause[Op.or] = [
         { DataName: { [Op.like]: `%${search}%` } },
@@ -2058,11 +2058,11 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
         { Remarks: { [Op.like]: `%${search}%` } }
       ];
     }
-    const restrictions=await db.DocumentRestrictions.findAll({
-      where:{
-        UserID:userid
+    const restrictions = await db.DocumentRestrictions.findAll({
+      where: {
+        UserID: userid
       },
-      raw:true
+      raw: true
     })
     // console.log("restr",restrictions)
     const restrictionIds = restrictions.map(r => r.DocumentID);
@@ -2074,61 +2074,61 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
       order: [['CreatedDate', 'DESC']]
     });
     const OCRDocumentReadFields = await db.OCRDocumentReadFields.findAll({
-     
+
       raw: true
     });
-    const templatemodels=await db.Template.findAll({raw:true})
+    const templatemodels = await db.Template.findAll({ raw: true })
     const newdocuments = documents.rows.map(async doc => {
-       const buffer = doc.DataImage; // e.g., from req.file.buffer or a DB BLOB
-        // console.log("doc",doc)
-        // Ensure the uploads/temp2 directory exists
-        const dir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
-        const filepathrelativetoserver=`document_${doc.ID}`
-        // const redacteddocspath=path.join(__dirname, `../public/images/redacteddocs`);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        await clearDirectory(dir)
-    // Specify the file path and name
-        const filePath = path.join(dir,'output.png');
+      const buffer = doc.DataImage; // e.g., from req.file.buffer or a DB BLOB
+      // console.log("doc",doc)
+      // Ensure the uploads/temp2 directory exists
+      const dir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
+      const filepathrelativetoserver = `document_${doc.ID}`
+      // const redacteddocspath=path.join(__dirname, `../public/images/redacteddocs`);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      await clearDirectory(dir)
+      // Specify the file path and name
+      const filePath = path.join(dir, 'output.png');
 
-        // Write the buffer to file
-        fs.writeFile(filePath, buffer, (err) => {
-          if (err) {
-            console.error('Error saving file:', err);
-          } else {
-            console.log('File saved successfully at', filePath);
-          }
-        });
-      const isRestricted = restrictionIds.includes(doc.ID+"");
-      const template=OCRDocumentReadFields.find(field => field.LinkId === doc.LinkID);
+      // Write the buffer to file
+      fs.writeFile(filePath, buffer, (err) => {
+        if (err) {
+          console.error('Error saving file:', err);
+        } else {
+          console.log('File saved successfully at', filePath);
+        }
+      });
+      const isRestricted = restrictionIds.includes(doc.ID + "");
+      const template = OCRDocumentReadFields.find(field => field.LinkId === doc.LinkID);
       // console.log("template",template,"OCRDocumentReadFields",OCRDocumentReadFields, "doc.LinkID",doc.LinkID)
       const template_id = template ? template.template_id : null;
-      let filepath='output.png';
-      if(template_id){
-        const templatemodel=templatemodels.find(t => t.ID == template_id);
+      let filepath = 'output.png';
+      if (template_id) {
+        const templatemodel = templatemodels.find(t => t.ID == template_id);
         // console.log("templatemodel",templatemodel)
-        const templatefields=templatemodel ? (templatemodel.fields?JSON.parse(templatemodel.fields):null) : [];
+        const templatefields = templatemodel ? (templatemodel.fields ? JSON.parse(templatemodel.fields) : null) : [];
         // console.log("templatefields",templatefields)
         // const blurringregions=restrictions.filter(r => r.DocumentID === doc.ID && templatefields.includes(r.Field));
-        const blurringregions=templatefields.filter(field => {
+        const blurringregions = templatefields.filter(field => {
           return restrictions.some(r => r.DocumentID === doc.ID && r.Field === field.fieldName);
         });
         // const redacteddocspath=path.join(__dirname, `../public/images/redacteddocs`);
-        let imageBuffer=doc.DataImage
+        let imageBuffer = doc.DataImage
         // console.log("redacteddocspath",dir)
-         if (doc.DataType === '.pdf'||doc.DataType === 'pdf') {
-                // For PDF files, you'd need to convert to image first
-                // This is a simplified example - you might want to use pdf2pic or similar
-        const imagebuffer=await convertPdfBufferToImages(doc.DataImage, path.join(__dirname,"/uploads/temp"));
+        if (doc.DataType === '.pdf' || doc.DataType === 'pdf') {
+          // For PDF files, you'd need to convert to image first
+          // This is a simplified example - you might want to use pdf2pic or similar
+          const imagebuffer = await convertPdfBufferToImages(doc.DataImage, path.join(__dirname, "/uploads/temp"));
           // console.log("imagebuffer",imagebuffer)
-          
+
           imageBuffer = imagebuffer.buffer;
-              }
-              console.log("filepathrelativetoserver before",filepathrelativetoserver)
-        const filename=await bluritout(imageBuffer, "output.png", dir, blurringregions,filepathrelativetoserver);
+        }
+        console.log("filepathrelativetoserver before", filepathrelativetoserver)
+        const filename = await bluritout(imageBuffer, "output.png", dir, blurringregions, filepathrelativetoserver);
         // console.log("blurringregions",blurringregions)
-         filepath= process.env.BASE_URL+`/static/public/${filename}`;
+        filepath = process.env.BASE_URL + `/static/public/${filename}`;
         //  console.log("filepath",filepath)
         //  ?
       }
@@ -2138,30 +2138,30 @@ router.get('/alldocuments_old/:userid', async (req, res) => {
       return {
         ...docJson,
         isRestricted: isRestricted,
-        filepath:filepath,
+        filepath: filepath,
         template_id: template ? template.ID : null,
         restrictions: isRestricted ? restrictions.filter(r => r.DocumentID === doc.ID) : []
       };
 
     })
-   Promise.all(newdocuments).then(newdocuments => {
-    res.status(200).json({
-      success: true,
-      data: {
-        documents: newdocuments,
-        pagination: {
-          currentPage: parsedPage,
-          totalPages: Math.ceil(documents.count / parsedLimit) || 1,
-          totalItems: documents.count,
-          itemsPerPage: parsedLimit
+    Promise.all(newdocuments).then(newdocuments => {
+      res.status(200).json({
+        success: true,
+        data: {
+          documents: newdocuments,
+          pagination: {
+            currentPage: parsedPage,
+            totalPages: Math.ceil(documents.count / parsedLimit) || 1,
+            totalItems: documents.count,
+            itemsPerPage: parsedLimit
+          }
         }
-      }
-    });
+      });
     })
-    
+
     // console.log(newdocuments)
     // await bluritout()
-    
+
 
   } catch (error) {
     console.error('Error fetching documents:', error);
@@ -2199,32 +2199,32 @@ router.get('/alldocuments/:userid', async (req, res) => {
         offset: offset,
         order: [['CreatedDate', 'DESC']]
       }),
-      db.OCRDocumentReadFields.findAll({ 
+      db.OCRDocumentReadFields.findAll({
         raw: true,
         order: [['CreatedAt', 'DESC']]
       }),
       db.Template.findAll({ raw: true })
     ]);
-    
+
     const restrictedIds = restrictions.map(r => r.DocumentID);
 
     // ⚡ OPTIMIZATION: Simplified - use IsCurrentVersion flag for speed
     const linkIds = documents.rows.map(doc => String(doc.LinkID));
-    
+
     // Fetch current versions first (fastest)
     const currentVersions = linkIds.length > 0 ? await db.DocumentVersions.findAll({
-      where: { 
+      where: {
         LinkID: { [Op.in]: linkIds },
         IsCurrentVersion: true
       },
       attributes: ['ID', 'LinkID', 'VersionNumber', 'ModificationDate', 'ModifiedBy'],
       raw: true
     }).catch(() => []) : [];
-    
+
     // Get missing LinkIDs
     const currentVersionLinkIds = new Set(currentVersions.map(v => String(v.LinkID)));
     const missingLinkIds = linkIds.filter(id => !currentVersionLinkIds.has(id));
-    
+
     // Fetch latest for missing ones and filter to one per LinkID
     let latestVersions = [];
     if (missingLinkIds.length > 0) {
@@ -2234,7 +2234,7 @@ router.get('/alldocuments/:userid', async (req, res) => {
         order: [['ModificationDate', 'DESC']],
         raw: true
       }).catch(() => []);
-      
+
       // Filter to only latest per LinkID (fast in-memory)
       const latestMap = {};
       allLatest.forEach(v => {
@@ -2245,9 +2245,9 @@ router.get('/alldocuments/:userid', async (req, res) => {
       });
       latestVersions = Object.values(latestMap);
     }
-    
+
     const allVersions = [...currentVersions, ...latestVersions];
-    
+
     // ⚡ OPTIMIZATION: Create version map (already filtered)
     const versionMap = {};
     allVersions.forEach(version => {
@@ -2260,14 +2260,14 @@ router.get('/alldocuments/:userid', async (req, res) => {
       const docJson = doc.toJSON();
       const LinkID = doc.LinkID;
       const isRestricted = restrictedIds.includes(doc.ID + "");
-      
+
       // Check if processed images already exist
       const dir = path.join(__dirname, `../public/images/nonredacteddocs/document_${doc.ID}`);
       const redactedDir = path.join(__dirname, `../public/images/redacteddocs/document_${doc.ID}`);
       const pathrelativetoserver = `document_${doc.ID}`;
-      
+
       let fileUrl = null;
-      
+
       // Try to find existing processed image
       if (fs.existsSync(dir)) {
         const files = fs.readdirSync(dir);
@@ -2276,7 +2276,7 @@ router.get('/alldocuments/:userid', async (req, res) => {
           fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
         }
       }
-      
+
       // Check for redacted version if restrictions exist
       if (isRestricted && fs.existsSync(redactedDir)) {
         const files = fs.readdirSync(redactedDir);
@@ -2288,7 +2288,7 @@ router.get('/alldocuments/:userid', async (req, res) => {
 
       const matchedField = OCRDocumentReadFields.find(field => field.LinkId === doc.LinkID);
       const templateId = matchedField ? matchedField.template_id : null;
-      
+
       return {
         ...docJson,
         isRestricted,
@@ -2323,320 +2323,320 @@ router.get('/alldocuments/:userid', async (req, res) => {
 
 // ⚡ FIX: Shared analytics handler function
 const getDocumentAnalyticsHandler = async (req, res) => {
-   try {
-     const { documentId } = req.params;
-     
-     // ⚡ FIX: Check if req.user exists
-     if (!req.user || !req.user.id) {
-       return res.status(401).json({ 
-         success: false, 
-         message: 'Authentication required' 
-       });
-     }
-     
-     const userId = req.user.id;
-     
-     // ⚡ OPTIMIZATION: Fetch initial document first for permission checks
-     const latestestdocument = await db.Documents.findByPk(documentId, {
-       attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId', 'Confidential', 'Active']
-     });
-     
-     if (!latestestdocument) {
-       return res.status(404).json({ success: false, message: 'Document not found' });
-     }
-     
-     // ⚡ FIX: Ensure LinkID is converted to string for consistency (but keep original for fallback)
-     const LinkID = String(latestestdocument.LinkID);
-     const LinkIDNum = parseInt(latestestdocument.LinkID) || LinkID; // Fallback for numeric queries
-     const departmentId = latestestdocument.DepartmentId;
-     const subDepartmentId = latestestdocument.SubDepartmentId;
-     const isConfidential = latestestdocument.Confidential === true || latestestdocument.Confidential === 1;
-     
-     // ⚡ DEBUG: Log permission check details
-     console.log('Permission Check:', {
-       userId,
-       documentId,
-       departmentId,
-       subDepartmentId,
-       isConfidential
-     });
-     
-     // ⚡ OPTIMIZATION: Check permissions in parallel
-     const [hasViewPermission, hasConfidentialPermission] = await Promise.all([
-       checkUserPermission(userId, departmentId, subDepartmentId, 'View'),
-       isConfidential ? checkUserPermission(userId, departmentId, subDepartmentId, 'Confidential') : Promise.resolve(true)
-     ]);
-     
-     // ⚡ DEBUG: Log permission results
-     console.log('Permission Results:', {
-       hasViewPermission,
-       hasConfidentialPermission,
-       isConfidential
-     });
-     
-     // ⚡ COMMENTED OUT: 403 Forbidden checks - always allow access if user is authenticated
-     // No more permission blocking for analytics endpoint
-     /*
-     if (!hasViewPermission) {
-       console.log('403 Error: User does not have View permission', {
-         userId,
-         departmentId,
-         subDepartmentId
-       });
-       
-       // Get diagnostic information to help debug
-       let diagnostics = null;
-       try {
-         diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
-         console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
-       } catch (diagError) {
-         console.error('Error getting diagnostics:', diagError);
-       }
-       
-       return res.status(403).json({
-         success: false,
-         message: 'You do not have permission to view documents in this department and document type',
-         details: {
-           userId,
-           departmentId,
-           subDepartmentId,
-           documentId
-         },
-         diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
-       });
-     }
-     
-     if (isConfidential && !hasConfidentialPermission) {
-       console.log('403 Error: User does not have Confidential permission', {
-         userId,
-         departmentId,
-         subDepartmentId
-       });
-       
-       // Get diagnostic information to help debug
-       let diagnostics = null;
-       try {
-         diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
-         console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
-       } catch (diagError) {
-         console.error('Error getting diagnostics:', diagError);
-       }
-       
-       return res.status(403).json({
-         success: false,
-         message: 'You do not have permission to view confidential documents in this department and document type',
-         details: {
-           userId,
-           departmentId,
-           subDepartmentId,
-           documentId,
-           isConfidential: true
-         },
-         diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
-       });
-     }
-     */
-     
-     // ⚡ OPTIMIZATION: Fetch document WITHOUT DataImage first (much faster), then fetch DataImage only if needed
-     // ⚡ FIX: Wrap each query in try-catch to handle individual failures
-     const [
-       document,
-       versions,
-       OCRDocumentReadFields,
-       collaborations,
-       comments,
-       auditTrails,
-       restrictions,
-       user,
-       approvers,
-       templates,
-       approvalsforthisdoc
-     ] = await Promise.all([
-       // Main document WITHOUT DataImage (exclude heavy BLOB for faster query)
-       db.Documents.findOne({
-         where: { LinkID: LinkID, Active: true },
-         attributes: { exclude: ['DataImage'] } // ⚡ OPTIMIZATION: Exclude large BLOB
-       }).catch(err => {
-         console.error('Error fetching document:', err);
-         return null;
-       }),
-       // Versions - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentVersions.findAll({
-             where: { LinkID: LinkID },
-             order: [['ModificationDate', 'DESC']]
-           });
-         } catch {
-           try {
-             return await db.DocumentVersions.findAll({
-               where: { LinkID: LinkIDNum },
-               order: [['ModificationDate', 'DESC']]
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // OCR Fields - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.OCRDocumentReadFields.findAll({
-             where: { LinkId: LinkID },
-             raw: true
-           });
-         } catch {
-           try {
-             return await db.OCRDocumentReadFields.findAll({
-               where: { LinkId: LinkIDNum },
-               raw: true
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // Collaborations - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentCollaborations.findAll({
-             where: { LinkID: LinkID }
-           });
-         } catch {
-           try {
-             return await db.DocumentCollaborations.findAll({
-               where: { LinkID: LinkIDNum }
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // Comments with pagination - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentComments.findAll({
-             where: { LinkID: LinkID },
-             order: [['CommentDate', 'DESC']],
-             limit: 50
-           });
-         } catch {
-           try {
-             return await db.DocumentComments.findAll({
-               where: { LinkID: LinkIDNum },
-               order: [['CommentDate', 'DESC']],
-               limit: 50
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // Audit trails with pagination - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentAuditTrail.findAll({
-             where: { LinkID: LinkID },
-             order: [['ActionDate', 'DESC']],
-             limit: 100
-           });
-         } catch {
-           try {
-             return await db.DocumentAuditTrail.findAll({
-               where: { LinkID: LinkIDNum },
-               order: [['ActionDate', 'DESC']],
-               limit: 100
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // Restrictions - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentRestrictions.findAll({
-             where: { LinkID: LinkID, UserID: userId },
-             order: [['CreatedDate', 'DESC']]
-           });
-         } catch {
-           try {
-             return await db.DocumentRestrictions.findAll({
-               where: { LinkID: LinkIDNum, UserID: userId },
-               order: [['CreatedDate', 'DESC']]
-             });
-           } catch {
-             return [];
-           }
-         }
-       })(),
-       // User data
-       db.Users.findOne({
-         where: { ID: userId },
-         attributes: ['ID', 'userAccessArray']
-       }).catch(() => null),
-       // Approvers - limit to essential fields only
-       db.DocumentApprovers.findAll({ 
-         raw: true,
-         attributes: ['ID', 'ApproverID', 'DepartmentId', 'SubDepartmentId', 'Level', 'IsMajority']
-       }).catch(() => []),
-       // Templates - limit to essential fields only
-       db.Template.findAll({ 
-         raw: true,
-         attributes: ['ID', 'fields', 'departmentId', 'subDepartmentId']
-       }).catch(() => []),
-       // Approvals - try string first, fallback to number
-       (async () => {
-         try {
-           return await db.DocumentApprovals.findAll({
-             where: { LinkID: LinkID },
-             raw: true
-           });
-         } catch {
-           try {
-             return await db.DocumentApprovals.findAll({
-               where: { LinkID: LinkIDNum },
-               raw: true
-             });
-           } catch {
-             return [];
-           }
-         }
-       })()
-     ]);
-     
-     if (!document) {
-       return res.status(404).json({
-         success: false,
-         message: 'Document not found'
-       });
-     }
+  try {
+    const { documentId } = req.params;
 
-     // ⚡ OPTIMIZATION: Log activities in parallel (non-blocking)
-     Promise.all([
-       logAuditTrail(documentId, 'VIEWED', userId, null, null, req, LinkID),
-       logCollaboratorActivity(documentId, userId, 'DOCUMENT_OPENED', req, null, LinkID)
-     ]).catch(err => console.error('Error logging activities:', err));
+    // ⚡ FIX: Check if req.user exists
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
 
-     // ⚡ FIX: Process restrictions mapping efficiently with null checks
-     const restrictionMap = {};
-     if (Array.isArray(restrictions)) {
-       restrictions.forEach(r => {
-         if (r && r.Field && !restrictionMap[r.Field]) {
-           restrictionMap[r.Field] = true;
-         }
-       });
-     }
-     
-     // ⚡ FIX: Process OCR fields with null checks
-     const updatedArray = Array.isArray(OCRDocumentReadFields) 
-       ? OCRDocumentReadFields.map(item => {
-           if (!item) return null;
-           const newitem = JSON.parse(JSON.stringify(item));
-           newitem.Restricted = restrictionMap[item.Field] || false;
-           return newitem;
-         }).filter(item => item !== null)
-       : [];
+    const userId = req.user.id;
+
+    // ⚡ OPTIMIZATION: Fetch initial document first for permission checks
+    const latestestdocument = await db.Documents.findByPk(documentId, {
+      attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId', 'Confidential', 'Active']
+    });
+
+    if (!latestestdocument) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    // ⚡ FIX: Ensure LinkID is converted to string for consistency (but keep original for fallback)
+    const LinkID = String(latestestdocument.LinkID);
+    const LinkIDNum = parseInt(latestestdocument.LinkID) || LinkID; // Fallback for numeric queries
+    const departmentId = latestestdocument.DepartmentId;
+    const subDepartmentId = latestestdocument.SubDepartmentId;
+    const isConfidential = latestestdocument.Confidential === true || latestestdocument.Confidential === 1;
+
+    // ⚡ DEBUG: Log permission check details
+    console.log('Permission Check:', {
+      userId,
+      documentId,
+      departmentId,
+      subDepartmentId,
+      isConfidential
+    });
+
+    // ⚡ OPTIMIZATION: Check permissions in parallel
+    const [hasViewPermission, hasConfidentialPermission] = await Promise.all([
+      checkUserPermission(userId, departmentId, subDepartmentId, 'View'),
+      isConfidential ? checkUserPermission(userId, departmentId, subDepartmentId, 'Confidential') : Promise.resolve(true)
+    ]);
+
+    // ⚡ DEBUG: Log permission results
+    console.log('Permission Results:', {
+      hasViewPermission,
+      hasConfidentialPermission,
+      isConfidential
+    });
+
+    // ⚡ COMMENTED OUT: 403 Forbidden checks - always allow access if user is authenticated
+    // No more permission blocking for analytics endpoint
+    /*
+    if (!hasViewPermission) {
+      console.log('403 Error: User does not have View permission', {
+        userId,
+        departmentId,
+        subDepartmentId
+      });
+      
+      // Get diagnostic information to help debug
+      let diagnostics = null;
+      try {
+        diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
+        console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
+      } catch (diagError) {
+        console.error('Error getting diagnostics:', diagError);
+      }
+      
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to view documents in this department and document type',
+        details: {
+          userId,
+          departmentId,
+          subDepartmentId,
+          documentId
+        },
+        diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
+      });
+    }
+    
+    if (isConfidential && !hasConfidentialPermission) {
+      console.log('403 Error: User does not have Confidential permission', {
+        userId,
+        departmentId,
+        subDepartmentId
+      });
+      
+      // Get diagnostic information to help debug
+      let diagnostics = null;
+      try {
+        diagnostics = await diagnosePermissionIssue(userId, departmentId, subDepartmentId);
+        console.log('Permission Diagnostics:', JSON.stringify(diagnostics, null, 2));
+      } catch (diagError) {
+        console.error('Error getting diagnostics:', diagError);
+      }
+      
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to view confidential documents in this department and document type',
+        details: {
+          userId,
+          departmentId,
+          subDepartmentId,
+          documentId,
+          isConfidential: true
+        },
+        diagnostics: process.env.NODE_ENV === 'development' ? diagnostics : undefined
+      });
+    }
+    */
+
+    // ⚡ OPTIMIZATION: Fetch document WITHOUT DataImage first (much faster), then fetch DataImage only if needed
+    // ⚡ FIX: Wrap each query in try-catch to handle individual failures
+    const [
+      document,
+      versions,
+      OCRDocumentReadFields,
+      collaborations,
+      comments,
+      auditTrails,
+      restrictions,
+      user,
+      approvers,
+      templates,
+      approvalsforthisdoc
+    ] = await Promise.all([
+      // Main document WITHOUT DataImage (exclude heavy BLOB for faster query)
+      db.Documents.findOne({
+        where: { LinkID: LinkID, Active: true },
+        attributes: { exclude: ['DataImage'] } // ⚡ OPTIMIZATION: Exclude large BLOB
+      }).catch(err => {
+        console.error('Error fetching document:', err);
+        return null;
+      }),
+      // Versions - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentVersions.findAll({
+            where: { LinkID: LinkID },
+            order: [['ModificationDate', 'DESC']]
+          });
+        } catch {
+          try {
+            return await db.DocumentVersions.findAll({
+              where: { LinkID: LinkIDNum },
+              order: [['ModificationDate', 'DESC']]
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // OCR Fields - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.OCRDocumentReadFields.findAll({
+            where: { LinkId: LinkID },
+            raw: true
+          });
+        } catch {
+          try {
+            return await db.OCRDocumentReadFields.findAll({
+              where: { LinkId: LinkIDNum },
+              raw: true
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // Collaborations - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentCollaborations.findAll({
+            where: { LinkID: LinkID }
+          });
+        } catch {
+          try {
+            return await db.DocumentCollaborations.findAll({
+              where: { LinkID: LinkIDNum }
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // Comments with pagination - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentComments.findAll({
+            where: { LinkID: LinkID },
+            order: [['CommentDate', 'DESC']],
+            limit: 50
+          });
+        } catch {
+          try {
+            return await db.DocumentComments.findAll({
+              where: { LinkID: LinkIDNum },
+              order: [['CommentDate', 'DESC']],
+              limit: 50
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // Audit trails with pagination - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentAuditTrail.findAll({
+            where: { LinkID: LinkID },
+            order: [['ActionDate', 'DESC']],
+            limit: 100
+          });
+        } catch {
+          try {
+            return await db.DocumentAuditTrail.findAll({
+              where: { LinkID: LinkIDNum },
+              order: [['ActionDate', 'DESC']],
+              limit: 100
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // Restrictions - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentRestrictions.findAll({
+            where: { LinkID: LinkID, UserID: userId },
+            order: [['CreatedDate', 'DESC']]
+          });
+        } catch {
+          try {
+            return await db.DocumentRestrictions.findAll({
+              where: { LinkID: LinkIDNum, UserID: userId },
+              order: [['CreatedDate', 'DESC']]
+            });
+          } catch {
+            return [];
+          }
+        }
+      })(),
+      // User data
+      db.Users.findOne({
+        where: { ID: userId },
+        attributes: ['ID', 'userAccessArray']
+      }).catch(() => null),
+      // Approvers - limit to essential fields only
+      db.DocumentApprovers.findAll({
+        raw: true,
+        attributes: ['ID', 'ApproverID', 'DepartmentId', 'SubDepartmentId', 'Level', 'IsMajority']
+      }).catch(() => []),
+      // Templates - limit to essential fields only
+      db.Template.findAll({
+        raw: true,
+        attributes: ['ID', 'fields', 'departmentId', 'subDepartmentId']
+      }).catch(() => []),
+      // Approvals - try string first, fallback to number
+      (async () => {
+        try {
+          return await db.DocumentApprovals.findAll({
+            where: { LinkID: LinkID },
+            raw: true
+          });
+        } catch {
+          try {
+            return await db.DocumentApprovals.findAll({
+              where: { LinkID: LinkIDNum },
+              raw: true
+            });
+          } catch {
+            return [];
+          }
+        }
+      })()
+    ]);
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // ⚡ OPTIMIZATION: Log activities in parallel (non-blocking)
+    Promise.all([
+      logAuditTrail(documentId, 'VIEWED', userId, null, null, req, LinkID),
+      logCollaboratorActivity(documentId, userId, 'DOCUMENT_OPENED', req, null, LinkID)
+    ]).catch(err => console.error('Error logging activities:', err));
+
+    // ⚡ FIX: Process restrictions mapping efficiently with null checks
+    const restrictionMap = {};
+    if (Array.isArray(restrictions)) {
+      restrictions.forEach(r => {
+        if (r && r.Field && !restrictionMap[r.Field]) {
+          restrictionMap[r.Field] = true;
+        }
+      });
+    }
+
+    // ⚡ FIX: Process OCR fields with null checks
+    const updatedArray = Array.isArray(OCRDocumentReadFields)
+      ? OCRDocumentReadFields.map(item => {
+        if (!item) return null;
+        const newitem = JSON.parse(JSON.stringify(item));
+        newitem.Restricted = restrictionMap[item.Field] || false;
+        return newitem;
+      }).filter(item => item !== null)
+      : [];
 
     // ⚡ OPTIMIZATION: Process user access and approvers efficiently
     let userAccess = [];
@@ -2657,100 +2657,100 @@ const getDocumentAnalyticsHandler = async (req, res) => {
           }
         }
       }
-    } catch(e) {
+    } catch (e) {
       console.warn('Error parsing userAccessArray:', e);
       userAccess = [];
     }
-     
-     const approversaccess = Array.isArray(approvers) 
-       ? approvers.filter(e => 
-           e && e.ApproverID && userAccess.includes(parseInt(e.ApproverID))
-         )
-       : [];
-     
-     const accessforthisdoc = approversaccess.find(e =>
-       e && e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
-     );
-     
-     const approvalsforusertoacceptorreject = accessforthisdoc && Array.isArray(approvalsforthisdoc) 
-       ? approvalsforthisdoc 
-       : [];
-     
-     // ⚡ OPTIMIZATION: Return metadata immediately, check cache first (FASTEST)
-     const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
-     const temppath = path.join(__dirname, `../public/images/nonredacteddocs/document_${document.ID}`);
-     const redactedpath = path.join(__dirname, `../public/images/redacteddocs/document_${document.ID}`);
-     const pathrelativetoserver = `document_${document.ID}`;
-     
-     let fileUrl = null;
-     let isRestricted = Array.isArray(restrictions) && restrictions.some(r => r.DocumentID === document.ID);
-     
-     // ⚡ OPTIMIZATION: Check for cached images FIRST (instant response)
-     if (fs.existsSync(temppath)) {
-       const files = fs.readdirSync(temppath);
-       if (files.length > 0) {
-         const latestFile = files.sort().reverse()[0];
-         // Check for redacted version if restricted
-         if (isRestricted && fs.existsSync(redactedpath)) {
-           const redactedFiles = fs.readdirSync(redactedpath);
-           if (redactedFiles.length > 0) {
-             const redactedFile = redactedFiles.sort().reverse()[0];
-             fileUrl = `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${redactedFile}`;
-           } else {
-             fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
-           }
-         } else {
-           fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
-         }
-       }
-     }
-     
-     // ⚡ OPTIMIZATION: If no cache, fetch DataImage and process in background (don't wait for response)
-     if (!fileUrl) {
-       // Fetch DataImage separately (only if needed)
-       db.Documents.findOne({
-         where: { LinkID: LinkID, Active: true },
-         attributes: ['ID', 'DataImage', 'DataType', 'LinkID']
-       })
-         .then(docWithImage => {
-           if (docWithImage && docWithImage.DataImage && docWithImage.DataImage.length > 0) {
-             // Merge DataImage into document object
-             document.DataImage = docWithImage.DataImage;
-             document.DataType = docWithImage.DataType;
-             
-             // Start processing in background (non-blocking)
-             return processDocument(document, restrictions || [], OCRDocumentReadFields || [], templates || [], false);
-           }
-           return null;
-         })
-         .then(result => {
-           if (result) {
-             console.log('Background image processing completed for document:', document.ID);
-           }
-         })
-         .catch(err => {
-           console.warn('Background image processing failed:', err.message);
-         });
-       
-       // Return immediately with null filepath (frontend can poll or show loading)
-       fileUrl = null;
-     }
-     
-     // Remove DataImage from response (too large)
-     delete docJson.DataImage;
-     
-     const processedDocs = [{
-       ...docJson,
-       filepath: fileUrl,
-       isRestricted: isRestricted,
-       template_id: OCRDocumentReadFields?.find(f => f.LinkId === LinkID)?.template_id || null,
-       restrictions: isRestricted ? (restrictions || []).filter(r => r.DocumentID === document.ID) : []
-     }];
-     
+
+    const approversaccess = Array.isArray(approvers)
+      ? approvers.filter(e =>
+        e && e.ApproverID && userAccess.includes(parseInt(e.ApproverID))
+      )
+      : [];
+
+    const accessforthisdoc = approversaccess.find(e =>
+      e && e.DepartmentId === document.DepartmentId && e.SubDepartmentId === document.SubDepartmentId
+    );
+
+    const approvalsforusertoacceptorreject = accessforthisdoc && Array.isArray(approvalsforthisdoc)
+      ? approvalsforthisdoc
+      : [];
+
+    // ⚡ OPTIMIZATION: Return metadata immediately, check cache first (FASTEST)
+    const docJson = typeof document.toJSON === 'function' ? document.toJSON() : document;
+    const temppath = path.join(__dirname, `../public/images/nonredacteddocs/document_${document.ID}`);
+    const redactedpath = path.join(__dirname, `../public/images/redacteddocs/document_${document.ID}`);
+    const pathrelativetoserver = `document_${document.ID}`;
+
+    let fileUrl = null;
+    let isRestricted = Array.isArray(restrictions) && restrictions.some(r => r.DocumentID === document.ID);
+
+    // ⚡ OPTIMIZATION: Check for cached images FIRST (instant response)
+    if (fs.existsSync(temppath)) {
+      const files = fs.readdirSync(temppath);
+      if (files.length > 0) {
+        const latestFile = files.sort().reverse()[0];
+        // Check for redacted version if restricted
+        if (isRestricted && fs.existsSync(redactedpath)) {
+          const redactedFiles = fs.readdirSync(redactedpath);
+          if (redactedFiles.length > 0) {
+            const redactedFile = redactedFiles.sort().reverse()[0];
+            fileUrl = `${process.env.BASE_URL}/static/public/redacteddocs/${pathrelativetoserver}/${redactedFile}`;
+          } else {
+            fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+          }
+        } else {
+          fileUrl = `${process.env.BASE_URL}/static/public/nonredacteddocs/${pathrelativetoserver}/${latestFile}`;
+        }
+      }
+    }
+
+    // ⚡ OPTIMIZATION: If no cache, fetch DataImage and process in background (don't wait for response)
+    if (!fileUrl) {
+      // Fetch DataImage separately (only if needed)
+      db.Documents.findOne({
+        where: { LinkID: LinkID, Active: true },
+        attributes: ['ID', 'DataImage', 'DataType', 'LinkID']
+      })
+        .then(docWithImage => {
+          if (docWithImage && docWithImage.DataImage && docWithImage.DataImage.length > 0) {
+            // Merge DataImage into document object
+            document.DataImage = docWithImage.DataImage;
+            document.DataType = docWithImage.DataType;
+
+            // Start processing in background (non-blocking)
+            return processDocument(document, restrictions || [], OCRDocumentReadFields || [], templates || [], false);
+          }
+          return null;
+        })
+        .then(result => {
+          if (result) {
+            console.log('Background image processing completed for document:', document.ID);
+          }
+        })
+        .catch(err => {
+          console.warn('Background image processing failed:', err.message);
+        });
+
+      // Return immediately with null filepath (frontend can poll or show loading)
+      fileUrl = null;
+    }
+
+    // Remove DataImage from response (too large)
+    delete docJson.DataImage;
+
+    const processedDocs = [{
+      ...docJson,
+      filepath: fileUrl,
+      isRestricted: isRestricted,
+      template_id: OCRDocumentReadFields?.find(f => f.LinkId === LinkID)?.template_id || null,
+      restrictions: isRestricted ? (restrictions || []).filter(r => r.DocumentID === document.ID) : []
+    }];
+
     // ⚡ OPTIMIZATION: Process versions to include filepath (fast - no async needed if Filepath exists)
     const processedVersions = (versions || []).map((version) => {
       const versionJson = version.toJSON ? version.toJSON() : version;
-      
+
       // ⚡ OPTIMIZATION: If Filepath is stored, use it directly (fast path)
       let filepath = null;
       if (versionJson.Filepath) {
@@ -2761,13 +2761,13 @@ const getDocumentAnalyticsHandler = async (req, res) => {
         // For now, return null - frontend can use version file endpoint
         filepath = null;
       }
-      
+
       return {
         ...versionJson,
         filepath: filepath // Add filepath to version object
       };
     });
-    
+
     const docwith = {
       document: processedDocs,
       versions: processedVersions, // ✅ Updated: versions now include filepath
@@ -2778,21 +2778,21 @@ const getDocumentAnalyticsHandler = async (req, res) => {
       OCRDocumentReadFields: updatedArray,
       approvalsforusertoacceptorreject: approvalsforusertoacceptorreject
     };
-     
-     res.status(200).json({
-       success: true,
-       data: docwith
-     });
 
-   } catch (error) {
-     console.error('Error fetching document:', error);
-     console.error('Error stack:', error.stack);
-     res.status(500).json({
-       success: false,
-       message: 'Error fetching document',
-       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-     });
-   }
+    res.status(200).json({
+      success: true,
+      data: docwith
+    });
+
+  } catch (error) {
+    console.error('Error fetching document:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching document',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
 };
 
 // ⚡ FIX: Support both routes for frontend compatibility
@@ -2875,7 +2875,7 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
         const fullPath = path.join(__dirname, '../public', version.Filepath);
         if (fs.existsSync(fullPath)) {
           fileBuffer = fs.readFileSync(fullPath);
-          
+
           // Determine content type from file extension
           const ext = path.extname(version.Filepath).toLowerCase();
           if (ext === '.pdf') contentType = 'application/pdf';
@@ -2885,7 +2885,7 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
           else if (ext === '.docx') contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
           else if (ext === '.xls') contentType = 'application/vnd.ms-excel';
           else if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-          
+
           filename = path.basename(version.Filepath);
         } else {
           console.log(`⚠️ [VERSION FILE] File not found on disk: ${fullPath}`);
@@ -2903,13 +2903,13 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
         const versionDocument = await db.Documents.findByPk(version.DocumentID, {
           attributes: ['DataImage', 'DataType', 'ID']
         });
-        
+
         if (versionDocument && versionDocument.DataImage) {
           // Convert to Buffer if needed
-          fileBuffer = Buffer.isBuffer(versionDocument.DataImage) 
-            ? versionDocument.DataImage 
+          fileBuffer = Buffer.isBuffer(versionDocument.DataImage)
+            ? versionDocument.DataImage
             : Buffer.from(versionDocument.DataImage);
-          
+
           // Determine content type
           if (versionDocument.DataType) {
             const dataType = versionDocument.DataType.toLowerCase();
@@ -2921,7 +2921,7 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
             else if (dataType.includes('xls')) contentType = 'application/vnd.ms-excel';
             else if (dataType.includes('xlsx')) contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
           }
-          
+
           // Update filename
           const ext = versionDocument.DataType ? `.${versionDocument.DataType.split('/').pop()}` : '.pdf';
           filename = `document_${version.LinkID}_${version.VersionNumber}${ext}`;
@@ -2931,10 +2931,10 @@ router.get('/documents/:documentId/versions/:versionId/file', requireAuth, async
             where: { LinkID: version.LinkID, Active: true },
             attributes: ['DataImage', 'DataType']
           });
-          
+
           if (currentDoc && currentDoc.DataImage) {
-            fileBuffer = Buffer.isBuffer(currentDoc.DataImage) 
-              ? currentDoc.DataImage 
+            fileBuffer = Buffer.isBuffer(currentDoc.DataImage)
+              ? currentDoc.DataImage
               : Buffer.from(currentDoc.DataImage);
             if (currentDoc.DataType) {
               const dataType = currentDoc.DataType.toLowerCase();
@@ -2983,12 +2983,12 @@ router.post('/documents/:documentId/collaborators', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { userId, collaboratorId, collaboratorName, collaboratorEmail, permissionLevel, addedBy } = req.body;
-    const documentlinkid=await db.Documents.findByPk(documentId)
-    const linkid=documentlinkid.LinkID
+    const documentlinkid = await db.Documents.findByPk(documentId)
+    const linkid = documentlinkid.LinkID
     const collaboration = await db.DocumentCollaborations.create({
       DocumentID: documentId,
       CollaboratorID: collaboratorId,
-      LinkID:linkid,
+      LinkID: linkid,
       CollaboratorName: collaboratorName,
       CollaboratorEmail: collaboratorEmail,
       PermissionLevel: permissionLevel || 'READ',
@@ -2997,7 +2997,7 @@ router.post('/documents/:documentId/collaborators', async (req, res) => {
       Active: true
     });
 
-    await logAuditTrail(documentId, 'COLLABORATOR_ADDED', addedBy, null, collaboration.toJSON(), req,linkid);
+    await logAuditTrail(documentId, 'COLLABORATOR_ADDED', addedBy, null, collaboration.toJSON(), req, linkid);
 
     res.status(201).json({
       success: true,
@@ -3062,8 +3062,8 @@ router.put('/documents/:documentId/collaborators/:collaboratorId', async (req, r
     const oldCollaboration = await db.DocumentCollaborations.findOne({
       where: { DocumentID: documentId, CollaboratorID: collaboratorId }
     });
-    const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const documentbypk = await db.Documents.findByPk(documentId)
+    const linkid = documentbypk.LinkID
     await db.DocumentCollaborations.update(
       { PermissionLevel: permissionLevel },
       { where: { DocumentID: documentId, CollaboratorID: collaboratorId } }
@@ -3093,12 +3093,12 @@ router.put('/documents/:documentId/collaborators/:collaboratorId', async (req, r
 });
 
 // DELETE - Remove collaborator
-router.delete('/documents/:documentId/collaborators/:collaboratorId',requireAuth, async (req, res) => {
+router.delete('/documents/:documentId/collaborators/:collaboratorId', requireAuth, async (req, res) => {
   try {
     const { documentId, collaboratorId } = req.params;
-    const removedBy=req?.user?.id
-const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const removedBy = req?.user?.id
+    const documentbypk = await db.Documents.findByPk(documentId)
+    const linkid = documentbypk.LinkID
     const collaboration = await db.DocumentCollaborations.findOne({
       where: { DocumentID: documentId, CollaboratorID: collaboratorId }
     });
@@ -3143,11 +3143,11 @@ router.post('/documents/:documentId/comments', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { collaboratorId, collaboratorName, comment, commentType, parentCommentId, pageNumber } = req.body;
-const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const documentbypk = await db.Documents.findByPk(documentId)
+    const linkid = documentbypk.LinkID
     const newComment = await db.DocumentComments.create({
       DocumentID: documentId,
-      LinkID:linkid,
+      LinkID: linkid,
       CollaboratorID: collaboratorId,
       CollaboratorName: collaboratorName,
       Comment: comment,
@@ -3158,8 +3158,8 @@ const documentbypk=await db.Documents.findByPk(documentId)
       Active: true
     });
 
-    await logAuditTrail(documentId, 'COMMENTED', collaboratorId, null, newComment.toJSON(), req,linkid);
-    await logCollaboratorActivity(documentId, collaboratorId, 'COMMENT_ADDED', req,JSON.stringify(newComment.toJSON()),linkid);
+    await logAuditTrail(documentId, 'COMMENTED', collaboratorId, null, newComment.toJSON(), req, linkid);
+    await logCollaboratorActivity(documentId, collaboratorId, 'COMMENT_ADDED', req, JSON.stringify(newComment.toJSON()), linkid);
 
     res.status(201).json({
       success: true,
@@ -3217,7 +3217,7 @@ router.put('/documents/:documentId/comments/:commentId', async (req, res) => {
     const { comment, updatedBy } = req.body;
 
     const oldComment = await db.DocumentComments.findByPk(commentId);
-    
+
     await db.DocumentComments.update(
       { Comment: comment },
       { where: { ID: commentId } }
@@ -3225,7 +3225,7 @@ router.put('/documents/:documentId/comments/:commentId', async (req, res) => {
 
     const updatedComment = await db.DocumentComments.findByPk(commentId);
 
-    await logCollaboratorActivity(documentId, updatedBy, 'COMMENT_EDITED', req,oldComment.LinkID);
+    await logCollaboratorActivity(documentId, updatedBy, 'COMMENT_EDITED', req, oldComment.LinkID);
 
     res.status(200).json({
       success: true,
@@ -3248,15 +3248,15 @@ router.delete('/documents/:documentId/comments/:commentId', async (req, res) => 
   try {
     const { documentId, commentId } = req.params;
     const { deletedBy } = req.body;
-    const document=await db.Documents.findByPk(documentId)
-    const linkid=document.LinkID
+    const document = await db.Documents.findByPk(documentId)
+    const linkid = document.LinkID
 
     await db.DocumentComments.update(
       { Active: false },
       { where: { ID: commentId } }
     );
 
-    await logCollaboratorActivity(documentId, deletedBy, 'COMMENT_DELETED', req,null,linkid);
+    await logCollaboratorActivity(documentId, deletedBy, 'COMMENT_DELETED', req, null, linkid);
 
     res.status(200).json({
       success: true,
@@ -3280,19 +3280,30 @@ const approvalHelper = require('../utils/approvalHelper');
 
 // CREATE - Request approval (NEW - Auto-create based on Approval Matrix)
 const createApprovalRequestHandler = async (req, res) => {
+  const requestStartTime = Date.now();
+  console.log(`🚀 [APPROVAL REQUEST] Starting for document ${req.params.documentId}`);
+
   try {
     const { documentId } = req.params;
-    
+
     if (!req.user) {
       return res.status(401).json({
         success: false,
         message: 'User not authenticated'
       });
     }
-    
+
     const requestedBy = req.user.id || req.user.userName;
 
-    const document = await db.Documents.findByPk(documentId);
+    // ⚡ PERF: Fetch document (exclude heavy BLOB field)
+    let stepStart = Date.now();
+    const document = await db.Documents.findByPk(documentId, {
+      attributes: {
+        exclude: ['DataImage']  // ⚡ CRITICAL: Exclude BLOB field to avoid loading entire file
+      }
+    });
+    console.log(`⚡ [PERF] Document fetch: ${Date.now() - stepStart}ms`);
+
     if (!document) {
       return res.status(404).json({
         success: false,
@@ -3311,34 +3322,45 @@ const createApprovalRequestHandler = async (req, res) => {
       });
     }
 
-    // Check if approval already requested
+    // ⚡ PERF: Check existing tracking
+    stepStart = Date.now();
     const existingTracking = await db.DocumentApprovalTracking.findOne({
       where: { DocumentID: documentId, LinkID: linkId }
     });
+    console.log(`⚡ [PERF] Check existing tracking: ${Date.now() - stepStart}ms`);
 
     if (existingTracking) {
-      // Reset tracking to restart approval flow
-      await existingTracking.update({
-        CurrentLevel: 1,
-        LevelsCompleted: 0,
-        FinalStatus: 'PENDING',
-        UpdatedDate: new Date()
-      });
-
-      // Archive / cancel previous approval requests
-      await db.DocumentApprovals.update({
-        Status: 'ARCHIVED',
-        IsCancelled: true
-      }, {
-        where: {
-          DocumentID: documentId,
-          LinkID: linkId
-        }
-      });
+      // ⚡ OPTIMIZATION: Run update and archive in parallel
+      stepStart = Date.now();
+      await Promise.all([
+        // Reset tracking to restart approval flow
+        existingTracking.update({
+          CurrentLevel: 1,
+          LevelsCompleted: 0,
+          FinalStatus: 'PENDING',
+          UpdatedDate: new Date()
+        }),
+        // Archive / cancel previous approval requests
+        // ⚡ NOTE: Ensure index exists on (DocumentID, LinkID, Status) for fast updates
+        db.DocumentApprovals.update({
+          Status: 'ARCHIVED',
+          IsCancelled: true
+        }, {
+          where: {
+            DocumentID: documentId,
+            LinkID: linkId,
+            Status: { [db.Sequelize.Op.ne]: 'ARCHIVED' }  // ⚡ Only update non-archived
+          }
+        })
+      ]);
+      console.log(`⚡ [PERF] Reset existing tracking (parallel): ${Date.now() - stepStart}ms`);
     }
 
-    // Get Approval Matrix
+    // ⚡ PERF: Get Approval Matrix
+    stepStart = Date.now();
     const matrix = await approvalHelper.getApprovalMatrix(document.DepartmentId, document.SubDepartmentId);
+    console.log(`⚡ [PERF] Get approval matrix: ${Date.now() - stepStart}ms`);
+
     if (!matrix) {
       return res.status(400).json({
         success: false,
@@ -3346,8 +3368,11 @@ const createApprovalRequestHandler = async (req, res) => {
       });
     }
 
-    // Calculate total levels
+    // ⚡ PERF: Calculate total levels
+    stepStart = Date.now();
     const totalLevels = await approvalHelper.calculateTotalLevels(document.DepartmentId, document.SubDepartmentId);
+    console.log(`⚡ [PERF] Calculate total levels: ${Date.now() - stepStart}ms`);
+
     if (totalLevels === 0) {
       return res.status(400).json({
         success: false,
@@ -3355,7 +3380,8 @@ const createApprovalRequestHandler = async (req, res) => {
       });
     }
 
-    // Create tracking record
+    // ⚡ PERF: Create tracking record
+    stepStart = Date.now();
     const tracking = await approvalHelper.getOrCreateTracking(
       documentId,
       linkId,
@@ -3364,16 +3390,26 @@ const createApprovalRequestHandler = async (req, res) => {
       totalLevels,
       matrix.AllorMajority
     );
+    console.log(`⚡ [PERF] Get/create tracking: ${Date.now() - stepStart}ms`);
 
-    // Create approval requests for Level 1
+    // ⚡ PERF: Create approval requests for Level 1 (pass document to avoid redundant fetch)
+    stepStart = Date.now();
     const requests = await approvalHelper.createApprovalRequestsForLevel(
       documentId,
       linkId,
       1,
-      requestedBy
+      requestedBy,
+      document  // ⚡ Pass document to eliminate redundant fetch
     );
+    console.log(`⚡ [PERF] Create approval requests: ${Date.now() - stepStart}ms`);
 
+    // ⚡ PERF: Log audit trail
+    stepStart = Date.now();
     await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, { tracking, requests }, req, linkId);
+    console.log(`⚡ [PERF] Audit trail logging: ${Date.now() - stepStart}ms`);
+
+    const totalTime = Date.now() - requestStartTime;
+    console.log(`✅ [APPROVAL REQUEST] Completed in ${totalTime}ms`);
 
     res.status(201).json({
       success: true,
@@ -3382,12 +3418,14 @@ const createApprovalRequestHandler = async (req, res) => {
         tracking: tracking,
         requests: requests,
         currentLevel: 1,
-        totalLevels: totalLevels
+        totalLevels: totalLevels,
+        performanceMs: totalTime  // Include performance metric in response
       }
     });
 
   } catch (error) {
-    console.error('Error requesting approval:', error);
+    const totalTime = Date.now() - requestStartTime;
+    console.error(`❌ [APPROVAL REQUEST] Failed after ${totalTime}ms:`, error);
     console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
@@ -3406,22 +3444,22 @@ router.post('/documents/:documentId/approvals', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { requestedBy, approverId, approverName, priority, dueDate, comments } = req.body;
-const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const documentbypk = await db.Documents.findByPk(documentId)
+    const linkid = documentbypk.LinkID
 
-    const doesexists=await db.DocumentApprovals.findOne({
-      where:{
+    const doesexists = await db.DocumentApprovals.findOne({
+      where: {
         RequestedBy: requestedBy,
-        LinkID:linkid
+        LinkID: linkid
       }
     })
-    if(doesexists){
-      return res.json({status:false,message:"request already made"})
+    if (doesexists) {
+      return res.json({ status: false, message: "request already made" })
     }
     const approval = await db.DocumentApprovals.create({
       DocumentID: documentId,
       RequestedBy: requestedBy,
-      LinkID:linkid,
+      LinkID: linkid,
       RequestedDate: new Date(),
       ApproverID: approverId,
       ApproverName: approverName,
@@ -3432,7 +3470,7 @@ const documentbypk=await db.Documents.findByPk(documentId)
       Active: true
     });
 
-    await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, approval.toJSON(), req,linkid);
+    await logAuditTrail(documentId, 'APPROVAL_REQUESTED', requestedBy, null, approval.toJSON(), req, linkid);
 
     res.status(201).json({
       success: true,
@@ -3456,24 +3494,24 @@ router.get('/documents/:documentId/approvals', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { Op } = require('sequelize');
-    
+
     // ⚡ OPTIMIZATION: Fetch document with only needed fields (exclude heavy BLOB)
     const doc = await db.Documents.findByPk(documentId, {
       attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId'],
       raw: true
     });
-    
+
     if (!doc) {
       return res.status(404).json({
         success: false,
         message: 'Document not found'
       });
     }
-    
+
     // ⚡ OPTIMIZATION: Handle LinkID type using OR condition (single query)
     const linkid = String(doc.LinkID);
     const linkidNum = isNaN(doc.LinkID) ? null : parseInt(doc.LinkID);
-    
+
     // ⚡ OPTIMIZATION: Single query with OR condition instead of try-catch fallback
     const approvals = await db.DocumentApprovals.findAll({
       where: {
@@ -3503,9 +3541,9 @@ router.get('/documents/:documentId/approvals', async (req, res) => {
 
 router.get('/documents/:documentId/approval/:id', async (req, res) => {
   try {
-    const { documentId ,id} = req.params;
-    const doc=await db.Documents.findByPk(documentId)
-    const linkid=doc.LinkID
+    const { documentId, id } = req.params;
+    const doc = await db.Documents.findByPk(documentId)
+    const linkid = doc.LinkID
     const approval = await db.DocumentApprovals.findOne({
       where: { ID: id },
       order: [['RequestedDate', 'DESC']]
@@ -3604,7 +3642,7 @@ const updateApprovalHandler = async (req, res) => {
       if (allCompleted) {
         // Calculate final status
         const finalStatus = await approvalHelper.calculateFinalStatus(documentId, document.LinkID);
-        
+
         await logAuditTrail(documentId, `APPROVAL_${finalStatus}`, approverId, oldApproval?.toJSON(), { finalStatus }, req, document.LinkID);
 
         return res.status(200).json({
@@ -3840,13 +3878,13 @@ router.put('/:documentId/approvals/:approvalId', requireAuth, updateApprovalHand
 const getApprovalStatusHandler = async (req, res) => {
   try {
     const { documentId } = req.params;
-    
+
     // ⚡ OPTIMIZATION: Fetch document with only needed fields (exclude heavy BLOB)
     const document = await db.Documents.findByPk(documentId, {
       attributes: ['ID', 'LinkID', 'DepartmentId', 'SubDepartmentId'],
       raw: false
     });
-    
+
     if (!document) {
       return res.status(404).json({
         success: false,
@@ -3886,7 +3924,7 @@ const getApprovalStatusHandler = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching approval status:', error.message);
-    
+
     res.status(500).json({
       success: false,
       message: 'Error fetching approval status',
@@ -3901,17 +3939,17 @@ router.get('/:documentId/approvals/status', requireAuth, getApprovalStatusHandle
 // ==================== RESTRICTIONS CRUD OPERATIONS ====================
 
 // CREATE - Add restriction old, field based only
-router.post('/documents/:documentId/restrictions',requireAuth, async (req, res) => {
+router.post('/documents/:documentId/restrictions', requireAuth, async (req, res) => {
   try {
     const { documentId } = req.params;
-    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason,Field } = req.body;
-    const documentbypk=await db.Documents.findByPk(documentId)
-    const linkid=documentbypk.LinkID
+    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason, Field } = req.body;
+    const documentbypk = await db.Documents.findByPk(documentId)
+    const linkid = documentbypk.LinkID
     const restriction = await db.DocumentRestrictions.create({
       DocumentID: documentId,
-      Field:Field,
+      Field: Field,
       UserID: UserID,
-      LinkID:linkid,
+      LinkID: linkid,
       UserRole: UserRole,
       RestrictedFields: restrictedFields || [],
       AllowedActions: allowedActions || ['read'],
@@ -3922,7 +3960,7 @@ router.post('/documents/:documentId/restrictions',requireAuth, async (req, res) 
       Active: true
     });
 
-    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restriction.toJSON()), req,linkid);
+    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restriction.toJSON()), req, linkid);
 
     res.status(201).json({
       success: true,
@@ -3942,24 +3980,24 @@ router.post('/documents/:documentId/restrictions',requireAuth, async (req, res) 
 
 
 // CREATE - Add restriction new, paragraph based
-router.post('/documents/:documentId/restrictions_new',requireAuth, async (req, res) => {
+router.post('/documents/:documentId/restrictions_new', requireAuth, async (req, res) => {
   try {
     const { documentId } = req.params;
-    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason,Field, restrictedType, restrictionType, xaxis, yaxis, width, height, pageNumber } = req.body;
+    const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason, Field, restrictedType, restrictionType, xaxis, yaxis, width, height, pageNumber } = req.body;
     console.error(restrictionType);
 
-    const documentbypk=await db.Documents.findByPk(documentId)
-    if(!documentbypk) {
+    const documentbypk = await db.Documents.findByPk(documentId)
+    if (!documentbypk) {
       throw new Error("Error : document not found");
     }
-    const linkid=documentbypk.LinkID
-    
+    const linkid = documentbypk.LinkID
+
     // Prepare restriction data
     const restrictionDataToSave = {
       DocumentID: documentId,
-      Field:Field,
+      Field: Field,
       UserID: UserID,
-      LinkID:linkid,
+      LinkID: linkid,
       UserRole: UserRole,
       RestrictedFields: restrictedFields || [],
       AllowedActions: allowedActions || ['read'],
@@ -3982,10 +4020,10 @@ router.post('/documents/:documentId/restrictions_new',requireAuth, async (req, r
 
     const restriction = await db.DocumentRestrictions.create(restrictionDataToSave);
     const restrictionData = restriction.toJSON ? restriction.toJSON() : restriction;
-    
+
     console.error(restrictionData);
 
-    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restrictionData), req,linkid);
+    await logAuditTrail(documentId, 'RESTRICTION_APPLIED', req.user.id, null, JSON.stringify(restrictionData), req, linkid);
 
     res.status(201).json({
       success: true,
@@ -4018,8 +4056,8 @@ router.get('/documents/:documentId/restrictions', async (req, res) => {
       const restriction = r.toJSON ? r.toJSON() : r;
       return {
         ...restriction,
-        pageNumber: restriction.pageNumber !== null && restriction.pageNumber !== undefined 
-          ? restriction.pageNumber 
+        pageNumber: restriction.pageNumber !== null && restriction.pageNumber !== undefined
+          ? restriction.pageNumber
           : 1
       };
     });
@@ -4040,7 +4078,7 @@ router.get('/documents/:documentId/restrictions', async (req, res) => {
 });
 router.get('/documents/:documentId/restrictions/:id', async (req, res) => {
   try {
-    const { documentId,id } = req.params;
+    const { documentId, id } = req.params;
 
     const restrictions = await db.DocumentRestrictions.findOne({
       where: { ID: id },
@@ -4062,11 +4100,11 @@ router.get('/documents/:documentId/restrictions/:id', async (req, res) => {
   }
 });
 // DELETE - Remove restriction
-router.delete('/documents/:documentId/restrictions/:restrictionId',requireAuth, async (req, res) => {
+router.delete('/documents/:documentId/restrictions/:restrictionId', requireAuth, async (req, res) => {
   try {
     const { documentId, restrictionId } = req.params;
     const removedBy = req.user.id;
-    
+
     // Check if document exists
     const documentbypk = await db.Documents.findByPk(documentId);
     if (!documentbypk) {
@@ -4075,9 +4113,9 @@ router.delete('/documents/:documentId/restrictions/:restrictionId',requireAuth, 
         message: 'Document not found'
       });
     }
-    
+
     const linkid = documentbypk.LinkID;
-    
+
     // Check if restriction exists
     const restriction = await db.DocumentRestrictions.findByPk(restrictionId);
     if (!restriction) {
@@ -4315,7 +4353,7 @@ router.delete('/documenttypes/:id', async (req, res) => {
     if (!type) return res.status(404).json({ error: 'Document type not found' });
 
     await type.destroy();
-    res.json({status:true, message: 'Document type deleted successfully' });
+    res.json({ status: true, message: 'Document type deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete document type' });
   }
@@ -4333,7 +4371,7 @@ router.get('/document-approvers', async (req, res) => {
     const active = req.query.active || req.query.Active;
 
     const where = {};
-    
+
     if (departmentId) where.DepartmentId = departmentId;
     if (subDepartmentId) where.SubDepartmentId = subDepartmentId;
     if (level) where.SequenceLevel = level;
@@ -4343,7 +4381,7 @@ router.get('/document-approvers', async (req, res) => {
       where: Object.keys(where).length > 0 ? where : {},
       order: [['DepartmentId', 'ASC'], ['SubDepartmentId', 'ASC'], ['SequenceLevel', 'ASC']]
     });
-    
+
     return res.status(200).json({
       status: true,
       approvers
@@ -4365,7 +4403,7 @@ router.get('/document-approvers/by-dept-subdept/:deptId/:subDeptId', async (req,
       },
       order: [['SequenceLevel', 'ASC']]
     });
-    
+
     return res.status(200).json({
       status: true,
       approvers
@@ -4387,7 +4425,7 @@ router.get('/document-approvers/by-level/:deptId/:subDeptId/:level', async (req,
         Active: true
       }
     });
-    
+
     return res.status(200).json({
       status: true,
       approvers
@@ -4402,9 +4440,9 @@ router.get('/document-approvers/:id', async (req, res) => {
   try {
     const approver = await DocumentApprovers.findByPk(req.params.id);
     if (!approver) return res.status(404).json({ message: 'Approver not found' });
-      return res.status(200).json({
-      status:true,
-      approver:approver
+    return res.status(200).json({
+      status: true,
+      approver: approver
     });
     // res.status(200).json(approver);
   } catch (err) {
@@ -4416,9 +4454,9 @@ router.get('/document-approvers/:id', async (req, res) => {
 router.post('/document-approvers', async (req, res) => {
   try {
     const { DepartmentId, SubDepartmentId, ApproverID, SequenceLevel, Active } = req.body;
-    const newApprover = await DocumentApprovers.create({ 
-      DepartmentId, 
-      SubDepartmentId, 
+    const newApprover = await DocumentApprovers.create({
+      DepartmentId,
+      SubDepartmentId,
       ApproverID,
       SequenceLevel: SequenceLevel || 1,
       Active: Active !== undefined ? Active : true
@@ -4463,23 +4501,23 @@ router.delete('/document-approvers/:id', async (req, res) => {
     if (!approver) return res.status(404).json({ message: 'Approver not found' });
 
     await approver.destroy();
-      return res.status(200).json({
-      status:true,
-      approver:approver
+    return res.status(200).json({
+      status: true,
+      approver: approver
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-router.get("/restore/:DocumentId",requireAuth,async(req,res)=>{
+router.get("/restore/:DocumentId", requireAuth, async (req, res) => {
 
   try {
     const { DocumentId } = req.params;
     const Document = await db.Documents.findByPk(DocumentId);
     if (!Document) return res.status(404).json({ message: 'Document not found' });
-    const LinkID=Document.LinkID
+    const LinkID = Document.LinkID
     // mark this document as active and all other deactivated
-    
+
     await db.Documents.update({ Active: false }, { where: { LinkID: LinkID } });
     await Document.update({ Active: true });
     await logAuditTrail(DocumentId, 'DOCUMENT_RESTORED', req.user.id, "restored", null, req, LinkID);
@@ -4490,14 +4528,14 @@ router.get("/restore/:DocumentId",requireAuth,async(req,res)=>{
       Document
     });
 
-} catch (error) {
-  console.error('Error restoring document:', error);
-  return res.status(500).json({
-    status: false,
-    message: 'Error restoring document',
-    error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-  });
-}
+  } catch (error) {
+    console.error('Error restoring document:', error);
+    return res.status(500).json({
+      status: false,
+      message: 'Error restoring document',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
 })
 
 router.get('/activities-dashboard', requireAuth, async (req, res) => {
@@ -4519,7 +4557,7 @@ router.get('/activities-dashboard', requireAuth, async (req, res) => {
       order: [['ActionDate', 'DESC']],
       limit: 10
     });
-    
+
     const docwith = {
       auditTrails,
     };
