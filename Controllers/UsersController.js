@@ -182,6 +182,11 @@ router.delete('/delete/:id', async (req, res) => {
             { Active: false },
             { where: { ID: id } }
         );
+        
+        // 🔴 Delete all previous accesses for this user
+        await db.UserUserAccess.destroy({
+            where: { UserID: id }
+        });
 
         if (updated === 0) {
             return res.status(404).json({ status: false, message: 'User not found' });
@@ -404,6 +409,8 @@ router.post('/edit', [
         res.status(500).json({ error });
     }
 });
+
+
 
 // Helper function to encrypt password
 async function encryptPassword(password) {
