@@ -3943,8 +3943,10 @@ router.post('/documents/:documentId/restrictions', requireAuth, async (req, res)
   try {
     const { documentId } = req.params;
     const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason, Field } = req.body;
-    const documentbypk = await db.Documents.findByPk(documentId)
-    const linkid = documentbypk.LinkID
+    const documentbypk = await db.Documents.findByPk(documentId, {
+      attributes: { exclude: ['DataImage'] }  // ⚡ Exclude BLOB
+    });
+    const linkid = documentbypk.LinkID;
     const restriction = await db.DocumentRestrictions.create({
       DocumentID: documentId,
       Field: Field,
@@ -3986,11 +3988,13 @@ router.post('/documents/:documentId/restrictions_new', requireAuth, async (req, 
     const { UserID, UserRole, restrictedFields, allowedActions, deniedActions, createdBy, reason, Field, restrictedType, restrictionType, xaxis, yaxis, width, height, pageNumber } = req.body;
     console.error(restrictionType);
 
-    const documentbypk = await db.Documents.findByPk(documentId)
+    const documentbypk = await db.Documents.findByPk(documentId, {
+      attributes: { exclude: ['DataImage'] }  // ⚡ Exclude BLOB
+    });
     if (!documentbypk) {
       throw new Error("Error : document not found");
     }
-    const linkid = documentbypk.LinkID
+    const linkid = documentbypk.LinkID;
 
     // Prepare restriction data
     const restrictionDataToSave = {
@@ -4101,12 +4105,22 @@ router.get('/documents/:documentId/restrictions/:id', async (req, res) => {
 });
 // DELETE - Remove restriction
 router.delete('/documents/:documentId/restrictions/:restrictionId', requireAuth, async (req, res) => {
+  const startTime = Date.now();
+  console.log(`🗑️ [DELETE RESTRICTION] Starting for restriction ${req.params.restrictionId}`);
+
   try {
     const { documentId, restrictionId } = req.params;
     const removedBy = req.user.id;
 
-    // Check if document exists
-    const documentbypk = await db.Documents.findByPk(documentId);
+    // ⚡ PERF: Check if document exists (exclude BLOB field)
+    let stepStart = Date.now();
+    const documentbypk = await db.Documents.findByPk(documentId, {
+      attributes: {
+        exclude: ['DataImage']  // ⚡ CRITICAL: Exclude BLOB field
+      }
+    });
+    console.log(`⚡ [PERF] Document fetch: ${Date.now() - stepStart}ms`);
+
     if (!documentbypk) {
       return res.status(404).json({
         success: false,
@@ -4116,8 +4130,11 @@ router.delete('/documents/:documentId/restrictions/:restrictionId', requireAuth,
 
     const linkid = documentbypk.LinkID;
 
-    // Check if restriction exists
+    // ⚡ PERF: Check if restriction exists
+    stepStart = Date.now();
     const restriction = await db.DocumentRestrictions.findByPk(restrictionId);
+    console.log(`⚡ [PERF] Restriction fetch: ${Date.now() - stepStart}ms`);
+
     if (!restriction) {
       return res.status(404).json({
         success: false,
@@ -4133,11 +4150,20 @@ router.delete('/documents/:documentId/restrictions/:restrictionId', requireAuth,
       });
     }
 
+    // ⚡ PERF: Delete restriction
+    stepStart = Date.now();
     await db.DocumentRestrictions.destroy({
       where: { ID: restrictionId }
     });
+    console.log(`⚡ [PERF] Restriction delete: ${Date.now() - stepStart}ms`);
 
+    // ⚡ PERF: Log audit trail
+    stepStart = Date.now();
     await logAuditTrail(documentId, 'RESTRICTION_REMOVED', removedBy, restriction?.toJSON(), null, req, linkid);
+    console.log(`⚡ [PERF] Audit trail: ${Date.now() - stepStart}ms`);
+
+    const totalTime = Date.now() - startTime;
+    console.log(`✅ [DELETE RESTRICTION] Completed in ${totalTime}ms`);
 
     res.status(200).json({
       success: true,
@@ -4145,11 +4171,14 @@ router.delete('/documents/:documentId/restrictions/:restrictionId', requireAuth,
     });
 
   } catch (error) {
-    console.error('Error removing restriction:', error);
+    const totalTime = Date.now() - startTime;
+    console.error(`❌ [DELETE RESTRICTION] Failed after ${totalTime}ms:`, error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error removing restriction',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
