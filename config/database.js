@@ -38,19 +38,19 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
   // dialect: 'mysql', // Use 'mysql' for MySQL
   port: process.env.DB_PORT || 3306, // Default port for MSSQL is 1433
 
-   pool: {
-        // Maximum number of connection in pool
-        max: 20, // ⚡ INCREASED: More connections for parallel queries
-        // Minimum number of connection in pool
-        min: 2, // ⚡ INCREASED: Keep some connections ready
-        // Maximum time (in ms) that pool will try to get connection before throwing error
-        acquire: 60000, // ⚡ INCREASED: 60 seconds for long-running queries
-        // Maximum time (in ms) a connection can be idle before being released.
-        // Set this to a value LESS THAN the MySQL server's wait_timeout.
-        idle: 30000, // ⚡ INCREASED: 30 seconds (less than typical MySQL wait_timeout of 28800)
-        // ⚡ NEW: Evict idle connections
-        evict: 10000 // Check for idle connections every 10 seconds
-    },
+  pool: {
+    // Maximum number of connection in pool
+    max: 20, // ⚡ INCREASED: More connections for parallel queries
+    // Minimum number of connection in pool
+    min: 2, // ⚡ INCREASED: Keep some connections ready
+    // Maximum time (in ms) that pool will try to get connection before throwing error
+    acquire: 60000, // ⚡ INCREASED: 60 seconds for long-running queries
+    // Maximum time (in ms) a connection can be idle before being released.
+    // Set this to a value LESS THAN the MySQL server's wait_timeout.
+    idle: 30000, // ⚡ INCREASED: 30 seconds (less than typical MySQL wait_timeout of 28800)
+    // ⚡ NEW: Evict idle connections
+    evict: 10000 // Check for idle connections every 10 seconds
+  },
   dialectOptions: {
     // instanceName: 'SQLEXPRESS', // 🟢 THIS IS REQUIRED
     // options: {
@@ -62,7 +62,7 @@ const sequelize = new Sequelize(process.env.DB_NAME, process.env.DB_USER, proces
 });
 
 sequelize.authenticate()
-  .then(async() => {
+  .then(async () => {
     await db.UserAccess.initialize();
     console.log('✅ Connection has been established successfully.');
   })
@@ -72,7 +72,7 @@ sequelize.authenticate()
 
 let models = [
   require("../models/AssignSubDepartmentModel"), // Adjust the path as necessary
-  require("../models/AttachmentModel"), 
+  require("../models/AttachmentModel"),
   require("../models/BarangayModel"),
   require("../models/DepartmentModel"),
   require("../models/DocumentAccessModel"),
@@ -103,7 +103,8 @@ let models = [
   require("../models/newFeatures/approvalmatrix"),
   require("../models/newFeatures/DocumentApprovalTracking"),
   require("../models/newFeatures/AuditActivities"),
-  require("../models/RoleDocumentAccessModel")
+  require("../models/RoleDocumentAccessModel"),
+  require("../models/Notification")
   // require('./yourModelFile') — add models here
 ];
 
@@ -135,12 +136,12 @@ db.Sequelize = Sequelize;
 // Optional: sync models to DB
 
 // sequelize.sync({
-  // force: true, // Set to true to drop and recreate tables
-  // alter: true // Set to true to update existing tables
+// force: true, // Set to true to drop and recreate tables
+// alter: true // Set to true to update existing tables
 // }).then(() => {
-  // console.log('✅ All models were synchronized successfully.');
+// console.log('✅ All models were synchronized successfully.');
 // }).catch(err => {
-  // console.error('❌ Error synchronizing models:', err);
+// console.error('❌ Error synchronizing models:', err);
 // });
 
 module.exports = db;

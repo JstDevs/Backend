@@ -5,7 +5,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 require("dotenv").config();
 const sharp = require('sharp');
-const multer=require("multer")
+const multer = require("multer")
 const cors = require('cors');
 const fs = require('fs');
 const Tesseract = require('tesseract.js');
@@ -14,16 +14,16 @@ var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 const usersRoutes = require('./Controllers/UsersController.js');
 const authRoutes = require('./Controllers/auth.js'); // Assuming you have an AuthController for authentication
-const userAccess=require("./Controllers/UserAccessController.js")
-const department=require("./Controllers/DepartmentController.js")
-const subdepartments=require("./Controllers/SubDepartmentController.js")
-const documents=require("./Controllers/DocumentsController.js")
-const templateController=require("./Controllers/TemplateController.js")
+const userAccess = require("./Controllers/UserAccessController.js")
+const department = require("./Controllers/DepartmentController.js")
+const subdepartments = require("./Controllers/SubDepartmentController.js")
+const documents = require("./Controllers/DocumentsController.js")
+const templateController = require("./Controllers/TemplateController.js")
 const OCRController = require('./Controllers/OCRController.js'); // Assuming you have an OCRController for OCR processing
 const unrecorded = require('./Controllers/UnrecordedController.js'); // Assuming you have an UnrecordedController for unrecorded documents
 const AllocationController = require('./Controllers/AllocationController.js'); // Assuming you have an AllocationController for allocation of documents
-const BatchUpload= require('./Controllers/BatchUpload.js'); // Assuming you have a BatchUploadController for batch uploads
-const ApprovalMatrix= require('./Controllers/ApprovalMatrix.js');
+const BatchUpload = require('./Controllers/BatchUpload.js'); // Assuming you have a BatchUploadController for batch uploads
+const ApprovalMatrix = require('./Controllers/ApprovalMatrix.js');
 const DocumentApproverController = require('./Controllers/DocumentApproverController.js');
 const AuditController = require('./Controllers/AuditController.js');
 const FieldsController = require('./Controllers/FieldsController.js');
@@ -49,7 +49,7 @@ const corsOptions = {
       'https://staging-portal.testthelink.online',
       'http://localhost:5173',
       'http://127.0.0.1:5173',
-      'http://192.168.1.215:5173'   
+      'http://192.168.1.215:5173'
     ];
 
     // Allow requests with no origin (Postman, curl, mobile apps)
@@ -72,12 +72,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/static/public',express.static(path.join(__dirname, 'public/images')));
+app.use('/static/public', express.static(path.join(__dirname, 'public/images')));
 // app.use(express.static(path.join(__dirname, 'dist')));
 app.get('/upload', async (req, res) => {
-     try {
+  try {
     const filePath = path.join(__dirname, "uploads/951dfbe5c46983c7caef348621720a8c"); // Change this to your uploaded file path
-    console.log("filePath",filePath)
+    console.log("filePath", filePath)
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ success: false, error: 'File not found' });
     }
@@ -110,9 +110,10 @@ app.use('/approvalMatrix', ApprovalMatrix); // Add your batch upload routes
 app.use('/document-approvers', DocumentApproverController);
 app.use('/audit', AuditController); // Add your audit routes
 app.use('/fields', FieldsController); // Add your fields routes
+app.use('/notifications', require('./Controllers/NotificationsController').router || require('./Controllers/NotificationsController')); // Check export style
 
 // catch 404 and forward to error handler
-app.use(function(req, res, next) {
+app.use(function (req, res, next) {
   next(createError(404));
 });
 // For single-page app routing
@@ -120,12 +121,12 @@ app.use(function(req, res, next) {
 
 // For single-page app routing
 app.get('/appp', (req, res) => {
-  console.log("req",path.join(__dirname, 'dist', 'index.html'))
+  console.log("req", path.join(__dirname, 'dist', 'index.html'))
   // return
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 // error handler
-app.use(function(err, req, res, next) {
+app.use(function (err, req, res, next) {
   // set locals, only providing error in development
   res.locals.message = err.message;
   res.locals.error = req.app.get('env') === 'development' ? err : {};
@@ -139,7 +140,7 @@ app.use(function(err, req, res, next) {
 // Sample hardcoded template for ID card
 const template = {
   name: { x: 30, y: 30, width: 180, height: 30 },
-  dob:  { x: 30, y: 70, width: 140, height: 30 }
+  dob: { x: 30, y: 70, width: 140, height: 30 }
 };
 
 
@@ -156,57 +157,58 @@ function isInsideTemplateBox(bbox, fieldBox) {
 
 // OCR processing and field extraction
 async function extractFields(imagePath, template) {
-  console.log("imagePath",imagePath)
+  console.log("imagePath", imagePath)
   const result = await Tesseract.recognize(imagePath, 'eng', { tessedit_pageseg_mode: 1 });
   const words = result.data.words;
- let extracted = {
+  let extracted = {
     name: '',
     dob: '',
     aadhaar: ''
   };
-  if(words){const extracted = {
-    name: '',
-    dob: ''
-  };
-  console.log("words",result)
+  if (words) {
+    const extracted = {
+      name: '',
+      dob: ''
+    };
+    console.log("words", result)
 
-  words.forEach(word => {
-    if (isInsideTemplateBox(word.bbox, template.name)) {
-      extracted.name += word.text + ' ';
-    }
-    if (isInsideTemplateBox(word.bbox, template.dob)) {
-      extracted.dob += word.text + ' ';
-    }
-  });
+    words.forEach(word => {
+      if (isInsideTemplateBox(word.bbox, template.name)) {
+        extracted.name += word.text + ' ';
+      }
+      if (isInsideTemplateBox(word.bbox, template.dob)) {
+        extracted.dob += word.text + ' ';
+      }
+    });
 
-  // Trim spaces
-  for (let key in extracted) {
-    extracted[key] = extracted[key].trim();
-  }
-}else if(result.data.text){
+    // Trim spaces
+    for (let key in extracted) {
+      extracted[key] = extracted[key].trim();
+    }
+  } else if (result.data.text) {
     const rawText = result.data.text;
-console.log("rawText====>",rawText,"===<")
-  // Clean up and normalize the text
-  const lines = rawText.split('\n').map(line => line.trim()).filter(Boolean);
+    console.log("rawText====>", rawText, "===<")
+    // Clean up and normalize the text
+    const lines = rawText.split('\n').map(line => line.trim()).filter(Boolean);
 
-  // Initialize result
- 
+    // Initialize result
 
-  // Logic: crude pattern matching (improve this per document structure)
-  lines.forEach(line => {
-    if (/^\d{4} \d{4} \d{4}$/.test(line)) {
-      extracted.aadhaar = line;
-    } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(line)) {
-      extracted.dob = line;
-    } else if (!extracted.name && /^[A-Z][a-z]+/.test(line)) {
-      extracted.name = line;
-    }
-  });
 
-  return extracted;
+    // Logic: crude pattern matching (improve this per document structure)
+    lines.forEach(line => {
+      if (/^\d{4} \d{4} \d{4}$/.test(line)) {
+        extracted.aadhaar = line;
+      } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(line)) {
+        extracted.dob = line;
+      } else if (!extracted.name && /^[A-Z][a-z]+/.test(line)) {
+        extracted.name = line;
+      }
+    });
+
+    return extracted;
   }
 
-  
+
 }
 
 
@@ -221,8 +223,8 @@ console.log("rawText====>",rawText,"===<")
 async function extractFieldsFromTemplate(imagePath, template) {
   const outputDir = './temp';
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
-const metadata = await sharp(imagePath).metadata();
-console.log(metadata.width, metadata.height);
+  const metadata = await sharp(imagePath).metadata();
+  console.log(metadata.width, metadata.height);
 
   const extracted = {};
 

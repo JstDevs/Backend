@@ -33,6 +33,7 @@ const Department = db.Department;
 const SubDepartment = db.SubDepartment
 const AssignSubDepartment = db.AssignSubDepartment
 const Documents = db.Documents;
+const Notification = db.Notification;
 const Fields = db.Fields;
 const pdf2pic = require('pdf2pic');
 
@@ -2983,7 +2984,9 @@ router.post('/documents/:documentId/collaborators', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { userId, collaboratorId, collaboratorName, collaboratorEmail, permissionLevel, addedBy } = req.body;
-    const documentlinkid = await db.Documents.findByPk(documentId)
+    const documentlinkid = await db.Documents.findByPk(documentId, {
+      attributes: { exclude: ['DataImage'] }
+    });
     const linkid = documentlinkid.LinkID
     const collaboration = await db.DocumentCollaborations.create({
       DocumentID: documentId,
@@ -2998,6 +3001,25 @@ router.post('/documents/:documentId/collaborators', async (req, res) => {
     });
 
     await logAuditTrail(documentId, 'COLLABORATOR_ADDED', addedBy, null, collaboration.toJSON(), req, linkid);
+
+    // Create Notification for the new collaborator
+    // Create Notification (Async - Fire and Forget)
+    (async () => {
+      try {
+        console.log('🔔 [COLLAB] Attempting to create notification for UserID:', collaboratorId);
+        const notif = await Notification.create({
+          UserID: collaboratorId,
+          Title: 'Collaborator Access',
+          Message: `You have been added as a collaborator to "${documentlinkid.FileName || 'a document'}"`,
+          Type: 'COLLABORATION',
+          Link: `/documents/view-document/${linkid}/${documentId}/alert/depname/subdepname`, // Adjust link format as needed
+          CreatedBy: addedBy
+        });
+        console.log('✅ [COLLAB] Notification created, ID:', notif.ID);
+      } catch (notifError) {
+        console.error('❌ [COLLAB] Error creating notification for collaborator:', notifError);
+      }
+    })();
 
     res.status(201).json({
       success: true,
@@ -3143,7 +3165,9 @@ router.post('/documents/:documentId/comments', async (req, res) => {
   try {
     const { documentId } = req.params;
     const { collaboratorId, collaboratorName, comment, commentType, parentCommentId, pageNumber } = req.body;
-    const documentbypk = await db.Documents.findByPk(documentId)
+    const documentbypk = await db.Documents.findByPk(documentId, {
+      attributes: { exclude: ['DataImage'] }
+    });
     const linkid = documentbypk.LinkID
     const newComment = await db.DocumentComments.create({
       DocumentID: documentId,
@@ -3160,6 +3184,178 @@ router.post('/documents/:documentId/comments', async (req, res) => {
 
     await logAuditTrail(documentId, 'COMMENTED', collaboratorId, null, newComment.toJSON(), req, linkid);
     await logCollaboratorActivity(documentId, collaboratorId, 'COMMENT_ADDED', req, JSON.stringify(newComment.toJSON()), linkid);
+
+    // Create Notifications (Async - Fire and Forget)
+    (async () => {
+      try {
+        console.log('🔔 [COMMENT] Fetching collaborators for LinkID:', linkid);
+        const collaborators = await db.DocumentCollaborations.findAll({
+          where: { LinkID: linkid, Active: true }
+        });
+        console.log(`🔔 [COMMENT] Found ${collaborators.length} collaborators.`);
+
+        const notifications = [];
+        collaborators.forEach(collab => {
+          if (collab.CollaboratorID != collaboratorId) {
+            notifications.push({
+              UserID: collab.CollaboratorID,
+              Title: 'New Comment',
+              Message: `${collaboratorName} commented on "${documentbypk.FileName || 'a document'}"`,
+              Type: 'COMMENT',
+              Link: `/documents/view-document/${linkid}/${documentId}/alert/depname/subdepname`,
+              CreatedBy: collaboratorId
+            });
+          }
+        });
+
+        // 3. Expand search: Notify based on Roles (RoleDocumentAccess) and Individual Access (DocumentAccess)
+        try {
+          const deptId = documentbypk.DepartmentId;
+          const subDeptId = documentbypk.SubDepartmentId;
+
+          // Gather all possible LinkIDs that could have permissions/roles assigned
+          const linkIDsToCheck = new Set();
+          if (linkid) linkIDsToCheck.add(String(linkid));
+          if (subDeptId) linkIDsToCheck.add(String(subDeptId));
+
+          // Also fetch any LinkIDs from AssignSubDepartment for this dept/subdept
+          try {
+            const assignedSubDeps = await db.AssignSubDepartment.findAll({
+              where: { DepartmentID: deptId, SubDepartmentID: subDeptId, Active: true },
+              attributes: ['LinkID']
+            });
+            assignedSubDeps.forEach(asd => linkIDsToCheck.add(String(asd.LinkID)));
+          } catch (asdError) {
+            console.warn('⚠️ [COMMENT] Error fetching LinkIDs from AssignSubDepartment:', asdError.message);
+          }
+
+          const uniqueLinkIDs = Array.from(linkIDsToCheck);
+          console.log(`🔔 [DEBUG] Finding recipients for Dept: ${deptId}, SubDept: ${subDeptId}, Checking LinkIDs:`, uniqueLinkIDs);
+
+          const recipientsSet = new Set();
+
+          // A. Get Individual Access (DocumentAccess)
+          const individualAccess = await db.DocumentAccess.findAll({
+            where: {
+              LinkID: { [db.Sequelize.Op.in]: uniqueLinkIDs },
+              Active: true
+            },
+            attributes: ['UserID']
+          });
+          individualAccess.forEach(ia => recipientsSet.add(parseInt(ia.UserID)));
+          console.log(`🔔 [DEBUG] Found ${individualAccess.length} individual overrides across LinkIDs.`);
+
+          // B. Get Role-Based Access (RoleDocumentAccess)
+          const roleAccess = await db.RoleDocumentAccess.findAll({
+            where: {
+              LinkID: { [db.Sequelize.Op.in]: uniqueLinkIDs },
+              Active: true
+            },
+            attributes: ['UserAccessID']
+          });
+          const roleIds = roleAccess.map(ra => parseInt(ra.UserAccessID));
+          console.log(`🔔 [DEBUG] Found roles with access:`, roleIds);
+
+          if (roleIds.length > 0) {
+            // Find users with these roles (via UserUserAccess)
+            const roleUsers = await db.UserUserAccess.findAll({
+              where: { UserAccessID: { [db.Sequelize.Op.in]: roleIds } },
+              attributes: ['UserID']
+            });
+            roleUsers.forEach(ru => recipientsSet.add(parseInt(ru.UserID)));
+            console.log(`🔔 [DEBUG] Found ${roleUsers.length} users via UserUserAccess roles.`);
+
+            // Also check users with these roles in their userAccessArray (slower catch-all)
+            const allUsers = await db.Users.findAll({
+              where: { Active: true },
+              attributes: ['ID', 'userAccessArray']
+            });
+
+            allUsers.forEach(user => {
+              let userRoles = user.userAccessArray;
+              if (typeof userRoles === 'string') {
+                try { userRoles = JSON.parse(userRoles); } catch (e) { }
+              }
+              if (Array.isArray(userRoles) && userRoles.some(r => roleIds.includes(parseInt(r)))) {
+                recipientsSet.add(parseInt(user.ID));
+              }
+            });
+          }
+
+          // C. Direct Department Assignment (AssignSubDepartment) - Final Catch-all for UserID entries
+          const directDeptUsers = await db.AssignSubDepartment.findAll({
+            where: {
+              [db.Sequelize.Op.or]: [
+                { DepartmentID: deptId, SubDepartmentID: subDeptId },
+                { LinkID: { [db.Sequelize.Op.in]: uniqueLinkIDs } }
+              ],
+              Active: true
+            },
+            attributes: ['UserID']
+          });
+          directDeptUsers.forEach(du => {
+            if (du.UserID) recipientsSet.add(parseInt(du.UserID));
+          });
+
+          console.log(`🔔 [DEBUG] Combined unique recipients count (before filter): ${recipientsSet.size}`);
+
+          // Add unique recipients to notification list
+          recipientsSet.forEach(userIdNum => {
+            if (userIdNum && userIdNum != collaboratorId) {
+              const alreadyInList = notifications.some(n => n.UserID == userIdNum);
+              if (!alreadyInList) {
+                notifications.push({
+                  UserID: userIdNum,
+                  Title: 'New Comment',
+                  Message: `${collaboratorName} commented on "${documentbypk.FileName || 'a document'}"`,
+                  Type: 'COMMENT',
+                  Link: `/documents/view-document/${linkid}/${documentId}/alert/depname/subdepname`,
+                  CreatedBy: collaboratorId
+                });
+              }
+            }
+          });
+
+        } catch (searchError) {
+          console.error('❌ [COMMENT] Error searching for recipients:', searchError);
+          console.error(searchError.stack);
+        }
+
+        // Notify document creator (if not already added)
+        if (documentbypk.Createdby) {
+          try {
+            const creator = await db.Users.findOne({ where: { UserName: documentbypk.Createdby } });
+            if (creator && creator.ID != collaboratorId) {
+              const alreadyAdded = notifications.some(n => n.UserID == creator.ID);
+              if (!alreadyAdded) {
+                console.log('🔔 [COMMENT] Adding document creator to notification list:', creator.UserName);
+                notifications.push({
+                  UserID: creator.ID,
+                  Title: 'New Comment',
+                  Message: `${collaboratorName} commented on your document "${documentbypk.FileName || 'a document'}"`,
+                  Type: 'COMMENT',
+                  Link: `/documents/view-document/${linkid}/${documentId}/alert/depname/subdepname`,
+                  CreatedBy: collaboratorId
+                });
+              }
+            }
+          } catch (creatorError) {
+            console.error('Error fetching creator for notification:', creatorError);
+          }
+        }
+
+        console.log(`🔔 [COMMENT] Final notification count before bulkCreate: ${notifications.length}`);
+        if (notifications.length > 0) {
+          console.log(`🔔 [COMMENT] Recipients:`, notifications.map(n => n.UserID));
+          await Notification.bulkCreate(notifications);
+          console.log('✅ [COMMENT] Notifications sent.');
+        } else {
+          console.log('⚠️ [COMMENT] No notifications to send (no recipients found or all filtered out).');
+        }
+      } catch (notifError) {
+        console.error('❌ [COMMENT] Error creating notifications for comment:', notifError);
+      }
+    })();
 
     res.status(201).json({
       success: true,
