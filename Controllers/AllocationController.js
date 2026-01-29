@@ -7,15 +7,15 @@ const requireAuth = require('../middleware/requireAuth'); // Adjust the path as 
 
 const db = require('../config/database'); // Adjust the path as needed
 // Import models (assuming they're already defined)
-const Department=db.Department;
-const SubDepartment=db.SubDepartment;
-const AssignSubdepartment=db.AssignSubDepartment;
+const Department = db.Department;
+const SubDepartment = db.SubDepartment;
+const AssignSubdepartment = db.AssignSubDepartment;
 
-const Fields=db.Fields;
-const Users=db.Users;
-const DocumentAccess=db.DocumentAccess;
-const RoleDocumentAccess=db.RoleDocumentAccess;
-const UserAccess=db.UserAccess;
+const Fields = db.Fields;
+const Users = db.Users;
+const DocumentAccess = db.DocumentAccess;
+const RoleDocumentAccess = db.RoleDocumentAccess;
+const UserAccess = db.UserAccess;
 // Helper function to get session username
 const getSessionUsername = (req) => {
     return req.user.userName || null;
@@ -31,7 +31,7 @@ const generateLinkID = () => {
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const milliseconds = String(now.getMilliseconds()).padStart(4, '0');
-    
+
     return `${month}${day}${year}${hours}${minutes}${seconds}${milliseconds}`;
 };
 
@@ -40,22 +40,22 @@ const loadDocumentType = async (depid, subdepid, req) => {
     const assignSubDep = await AssignSubdepartment.findAll({
         where: { DepartmentID: depid, Active: true }
     });
-    
+
     const dept = await Department.findOne({ where: { ID: depid } });
     const subDeptList = await SubDepartment.findAll();
-    
+
     req.viewData = req.viewData || {};
     req.viewBag = req.viewBag || {};
-    
+
     req.viewData.AssignSubDep = assignSubDep;
     req.viewBag.Department = dept.Name;
     req.viewBag.depid = depid;
 
     if (assignSubDep.length > 0) {
         const subdept = await SubDepartment.findAll();
-        
+
         // Remove assigned subdepartments from available list
-        const filteredSubDeptList = subDeptList.filter(subDept => 
+        const filteredSubDeptList = subDeptList.filter(subDept =>
             !assignSubDep.some(assigned => assigned.SubDepartmentID === subDept.ID)
         );
 
@@ -67,15 +67,15 @@ const loadDocumentType = async (depid, subdepid, req) => {
                 req.viewBag.SubDepartment = selectedSub.Name;
                 req.viewBag.subdepid = subdepid;
             }
-            
+
             const item = await AssignSubdepartment.findOne({
-                where: { 
-                    DepartmentID: depid, 
-                    SubDepartmentID: subdepid, 
-                    Active: true 
+                where: {
+                    DepartmentID: depid,
+                    SubDepartmentID: subdepid,
+                    Active: true
                 }
             });
-            
+
             if (item) {
                 await loadDocumentAccess(item.LinkID, req);
             }
@@ -97,21 +97,21 @@ const loadDocumentType = async (depid, subdepid, req) => {
 const loadDocumentAccess = async (linkID, req) => {
     req.viewBag = req.viewBag || {};
     req.viewData = req.viewData || {};
-    
+
     req.viewBag.linkid = linkID;
-    
+
     const users = await Users.findAll();
     const selectedDocumentAccess = await DocumentAccess.findAll({
         where: { LinkID: linkID, Active: true }
     });
-    
+
     const activeUsers = await Users.findAll({ where: { Active: true } });
     const docuAccess = await DocumentAccess.findAll({
         where: { LinkID: linkID, Active: true }
     });
 
     // Filter out users who already have access
-    const availableUsers = activeUsers.filter(user => 
+    const availableUsers = activeUsers.filter(user =>
         !docuAccess.some(access => access.UserID === user.ID)
     );
 
@@ -124,29 +124,29 @@ const loadDocumentAccess = async (linkID, req) => {
 router.get('/', async (req, res) => {
     try {
         const { depid = 0, linkid = 0, subdepid = 0, departmentId, subDepartmentId } = req.query;
-        
+
         // Handle JSON API requests for departmentId/subDepartmentId (frontend API calls)
         if (departmentId && subDepartmentId) {
             // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
             const assignedSubDeps = await AssignSubdepartment.findAll({
-                where: { 
-                    DepartmentID: departmentId, 
-                    SubDepartmentID: subDepartmentId, 
-                    Active: true 
+                where: {
+                    DepartmentID: departmentId,
+                    SubDepartmentID: subDepartmentId,
+                    Active: true
                 }
             });
-            
+
             if (!assignedSubDeps || assignedSubDeps.length === 0) {
                 return res.json({ status: true, data: [] }); // Return empty array if no assignment found
             }
-            
+
             // Get all unique LinkIDs from the assigned subdepartments
             const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
-            
+
             const allocations = await DocumentAccess.findAll({
-                where: { 
+                where: {
                     LinkID: { [Op.in]: linkIDs },
-                    Active: true 
+                    Active: true
                 },
                 include: [{
                     model: Users,
@@ -154,16 +154,16 @@ router.get('/', async (req, res) => {
                 }],
                 order: [['CreatedDate', 'DESC']]
             });
-            
+
             return res.json({ status: true, data: allocations });
         }
-        
+
         req.viewData = {};
         req.viewBag = {};
 
         // Check for TempData (stored in session)
         const finalListJson = req.session.FinalList;
-        
+
         if (finalListJson) {
             let finalList;
             try {
@@ -174,12 +174,12 @@ router.get('/', async (req, res) => {
                 finalList = [];
             }
             req.viewData.DepartmentList = finalList;
-            
+
             const firstList = finalList[0];
             if (firstList) {
                 await loadDocumentType(firstList.ID, 0, req);
             }
-            
+
             delete req.session.FinalList;
             return res.render('allocation/index', { viewData: req.viewData, viewBag: req.viewBag });
         }
@@ -211,11 +211,11 @@ router.get('/', async (req, res) => {
 
             await loadDocumentType(deptid, subdeptid, req);
             await loadDocumentAccess(linkID, req);
-            
+
             delete req.session.subdeptid;
             delete req.session.deptid;
             delete req.session.linkID;
-            
+
             return res.render('allocation/index', { viewData: req.viewData, viewBag: req.viewBag });
         }
 
@@ -234,16 +234,16 @@ router.get('/', async (req, res) => {
 router.get('/add-subdepartment', async (req, res) => {
     try {
         const { depid, subdepid = 0 } = req.query;
-        
+
         const assignSubDep = await AssignSubdepartment.findAll({
             where: { DepartmentID: depid, Active: true }
         });
-        
+
         const dept = await Department.findOne({ where: { ID: depid } });
         const subDeptList = await SubDepartment.findAll();
-        
+
         // Filter out assigned subdepartments
-        const availableSubDepts = subDeptList.filter(subDept => 
+        const availableSubDepts = subDeptList.filter(subDept =>
             !assignSubDep.some(assigned => assigned.SubDepartmentID === subDept.ID)
         );
 
@@ -278,11 +278,11 @@ router.get('/add-subdepartment', async (req, res) => {
 router.post('/save-subdepartment', async (req, res) => {
     try {
         const { depid, subdepid } = req.body;
-        
+
         const checkSubDept = await AssignSubdepartment.findOne({
             where: { DepartmentID: depid, SubDepartmentID: subdepid }
         });
-        
+
         const createdBy = getSessionUsername(req);
         const createdDate = new Date();
 
@@ -291,11 +291,11 @@ router.post('/save-subdepartment', async (req, res) => {
                 { Active: true, CreatedBy: createdBy, CreatedDate: createdDate },
                 { where: { LinkID: checkSubDept.LinkID } }
             );
-            
+
             req.session.linkID = checkSubDept.LinkID.toString();
         } else {
             const LinkID = parseInt(generateLinkID());
-            
+
             await AssignSubdepartment.create({
                 LinkID: LinkID,
                 DepartmentID: depid,
@@ -307,7 +307,7 @@ router.post('/save-subdepartment', async (req, res) => {
 
             // Create default fields
             const fieldsToCreate = [];
-            
+
             for (let i = -1; i <= 11; i++) {
                 let fieldData;
                 if (i === -1) {
@@ -362,7 +362,7 @@ router.post('/save-subdepartment', async (req, res) => {
 router.post('/delete/:linkID', async (req, res) => {
     try {
         const { linkID } = req.params;
-        
+
         await AssignSubdepartment.update(
             { Active: false },
             { where: { LinkID: linkID } }
@@ -378,7 +378,7 @@ router.post('/delete/:linkID', async (req, res) => {
 router.delete('/delete-user/:depid/:subdepid/:userid', async (req, res) => {
     try {
         const { depid, subdepid, userid } = req.params;
-        
+
         await db.AssignSubDepartment.destroy({
             where: {
                 UserID: userid,
@@ -388,7 +388,7 @@ router.delete('/delete-user/:depid/:subdepid/:userid', async (req, res) => {
         });
 
         return res.json({
-            status: true,   
+            status: true,
         });
     } catch (error) {
         console.error('Error in delete-user route:', error);
@@ -405,11 +405,11 @@ router.get('/add-user', async (req, res) => {
                 DepartmentID: depid,
                 SubDepartmentID: subdepid
             }
-            });
+        });
 
-            if (existing) {
+        if (existing) {
             return res.status(409).json({ error: 'User already assigned to this department and subdepartment' });
-            }
+        }
         const users = await Users.findAll({ where: { Active: true } });
         const docuAccess = await DocumentAccess.findAll({
             where: { LinkID: linkid, Active: true }
@@ -417,7 +417,7 @@ router.get('/add-user', async (req, res) => {
         const subDep = await SubDepartment.findOne({ where: { ID: subdepid } });
 
         // Filter available users
-        const availableUsers = users.filter(user => 
+        const availableUsers = users.filter(user =>
             !docuAccess.some(access => access.UserID === user.ID)
         );
 
@@ -452,7 +452,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
         console.log('=== add-user POST request received ===');
         console.log('Request body:', JSON.stringify(req.body, null, 2));
         console.log('User from auth:', req.user);
-        
+
         const {
             depid, subdepid, userid,
             View = false, Add = false, Edit = false,
@@ -460,24 +460,24 @@ router.post('/add-user', requireAuth, async (req, res) => {
             Comment = false, Collaborate = false, Finalize = false, Masking = false,
             fields
         } = req.body;
-        
+
         // Validate required fields
         if (!depid || !subdepid || !userid) {
             console.error('Missing required fields:', { depid, subdepid, userid });
-            return res.status(400).json({ 
-                error: 'Missing required fields', 
-                details: 'depid, subdepid, and userid are required' 
+            return res.status(400).json({
+                error: 'Missing required fields',
+                details: 'depid, subdepid, and userid are required'
             });
         }
-        
+
         // Ensure fields has a default value (empty array) if not provided
         const fieldsValue = fields !== undefined && fields !== null ? fields : [];
-        
+
         const createdBy = req.user?.userName || null;
         const createdDate = new Date();
-        
+
         console.log('Processing with:', { depid, subdepid, userid, fieldsValue: Array.isArray(fieldsValue) ? fieldsValue.length : fieldsValue });
-        
+
         // Check if user already has an allocation for this dept/subdept combination
         // by checking AssignSubDepartment first
         const userAssignSubDep = await db.AssignSubDepartment.findOne({
@@ -487,19 +487,19 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 SubDepartmentID: subdepid
             }
         });
-        
+
         let linkid;
         let isUpdate = false;
-        
+
         if (userAssignSubDep) {
             // User already has an AssignSubDepartment record, use its LinkID
             linkid = String(userAssignSubDep.LinkID); // Ensure it's a string
-            
+
             // Check if DocumentAccess exists for this LinkID and UserID
             const existingAccess = await DocumentAccess.findOne({
                 where: { LinkID: linkid, UserID: userid }
             });
-            
+
             if (existingAccess) {
                 // Update existing allocation
                 const updateData = {
@@ -515,16 +515,16 @@ router.post('/add-user', requireAuth, async (req, res) => {
                     Finalize: Finalize,
                     Masking: Masking
                 };
-                
+
                 // Only include fields if provided
                 if (fields !== undefined && fields !== null) {
                     updateData.fields = fieldsValue;
                 }
-                
+
                 await DocumentAccess.update(updateData, {
                     where: { LinkID: linkid, UserID: userid }
                 });
-                
+
                 // Ensure AssignSubDepartment is active
                 if (!userAssignSubDep.Active) {
                     await db.AssignSubDepartment.update(
@@ -532,7 +532,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                         { where: { LinkID: linkid, UserID: userid, DepartmentID: depid, SubDepartmentID: subdepid } }
                     );
                 }
-                
+
                 return res.json({
                     status: true,
                     message: 'Allocation updated successfully'
@@ -542,22 +542,22 @@ router.post('/add-user', requireAuth, async (req, res) => {
             // User doesn't have an AssignSubDepartment record yet
             // Check if there's an existing LinkID for this dept/subdept (shared by other users)
             const existingAssignSubDep = await db.AssignSubDepartment.findOne({
-                where: { 
-                    DepartmentID: depid, 
-                    SubDepartmentID: subdepid, 
-                    Active: true 
+                where: {
+                    DepartmentID: depid,
+                    SubDepartmentID: subdepid,
+                    Active: true
                 }
             });
-            
+
             if (existingAssignSubDep) {
                 // Reuse existing LinkID for this dept/subdept
                 linkid = String(existingAssignSubDep.LinkID); // Ensure it's a string
-                
+
                 // Check if DocumentAccess already exists (shouldn't happen, but check anyway)
                 const existingAccess = await DocumentAccess.findOne({
                     where: { LinkID: linkid, UserID: userid }
                 });
-                
+
                 if (existingAccess) {
                     // Update existing
                     const updateData = {
@@ -573,12 +573,12 @@ router.post('/add-user', requireAuth, async (req, res) => {
                         Finalize: Finalize,
                         Masking: Masking
                     };
-                    
+
                     // Only include fields if provided
                     if (fields !== undefined && fields !== null) {
                         updateData.fields = fieldsValue;
                     }
-                    
+
                     await DocumentAccess.update(updateData, {
                         where: { LinkID: linkid, UserID: userid }
                     });
@@ -589,7 +589,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 linkid = generateLinkID(); // Keep as string, don't parseInt
             }
         }
-        
+
         // Create AssignSubDepartment record if it doesn't exist
         if (!userAssignSubDep) {
             try {
@@ -607,7 +607,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                         CreatedDate: createdDate
                     }
                 });
-                
+
                 // If record already existed, update it to ensure it's active and has correct user
                 if (!created) {
                     await db.AssignSubDepartment.update({
@@ -621,7 +621,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                         where: { LinkID: linkid }
                     });
                 }
-                
+
                 console.log('AssignSubDepartment record:', created ? 'created' : 'updated', 'for LinkID:', linkid);
             } catch (createError) {
                 console.error('Error creating/updating AssignSubDepartment:', createError);
@@ -643,7 +643,7 @@ router.post('/add-user', requireAuth, async (req, res) => {
                 }
             }
         }
-        
+
         // Create DocumentAccess if it doesn't exist (or update if it does)
         if (!isUpdate) {
             const existingAccess = await DocumentAccess.findOne({
@@ -664,12 +664,12 @@ router.post('/add-user', requireAuth, async (req, res) => {
                     Finalize: Finalize,
                     Masking: Masking
                 };
-                
+
                 // Only include fields if provided
                 if (fields !== undefined && fields !== null) {
                     updateData.fields = fieldsValue;
                 }
-                
+
                 await DocumentAccess.update(updateData, {
                     where: { LinkID: linkid, UserID: userid }
                 });
@@ -712,11 +712,11 @@ router.post('/add-user', requireAuth, async (req, res) => {
             sqlMessage: error.sqlMessage,
             sql: error.sql
         });
-        
+
         // Provide more specific error messages
         let errorMessage = 'Internal server error';
         let errorDetails = error.message;
-        
+
         if (error.name === 'SequelizeValidationError') {
             errorMessage = 'Validation error';
             errorDetails = error.errors.map(e => e.message).join(', ');
@@ -727,9 +727,9 @@ router.post('/add-user', requireAuth, async (req, res) => {
             errorMessage = 'Database error';
             errorDetails = error.message;
         }
-        
-        res.status(500).json({ 
-            error: errorMessage, 
+
+        res.status(500).json({
+            error: errorMessage,
             details: errorDetails,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
@@ -739,10 +739,10 @@ router.post('/add-user', requireAuth, async (req, res) => {
 router.get('/edit-user', async (req, res) => {
     try {
         const { depid, subdepid, linkid } = req.query;
-        
+
         const depName = await Department.findOne({ where: { ID: depid } });
         const subDepName = await SubDepartment.findOne({ where: { ID: subdepid } });
-        
+
         req.viewBag = {
             depname: depName.Name,
             subdepname: subDepName.Name,
@@ -752,7 +752,7 @@ router.get('/edit-user', async (req, res) => {
         };
 
         await loadDocumentAccess(linkid, req);
-        
+
         res.render('allocation/edit-user', { viewData: req.viewData, viewBag: req.viewBag });
     } catch (error) {
         console.error('Error in edit-user route:', error);
@@ -763,17 +763,17 @@ router.get('/edit-user', async (req, res) => {
 router.post('/edit-user', async (req, res) => {
     try {
         const { userID, linkid
-            ,view, add, edit, delete: deleteAccess, print, confidential, comment, collaborate, finalize, masking
+            , view, add, edit, delete: deleteAccess, print, confidential, comment, collaborate, finalize, masking
 
 
-         } = req.body;
-        
+        } = req.body;
+
         const selectedUsers = await DocumentAccess.findOne({
             where: { LinkID: linkid, UserID: userID }
         });
-        console.log("selectedUsers",selectedUsers)
+        console.log("selectedUsers", selectedUsers)
         if (selectedUsers) {
-           
+
 
             await DocumentAccess.update({
                 View: view,
@@ -814,7 +814,7 @@ router.post('/cbx-department', async (req, res) => {
 router.post('/search', async (req, res) => {
     try {
         const { inputValue } = req.body;
-        
+
         if (!inputValue) {
             return res.redirect('/allocation');
         }
@@ -833,7 +833,7 @@ router.post('/search', async (req, res) => {
 
         // Combine and remove duplicates
         const allDepartments = [...nameDepartments, ...codeDepartments];
-        const uniqueDepartments = allDepartments.filter((dept, index, self) => 
+        const uniqueDepartments = allDepartments.filter((dept, index, self) =>
             index === self.findIndex(d => d.ID === dept.ID)
         );
 
@@ -849,7 +849,7 @@ router.get('/fields', async (req, res) => {
     try {
         const viewBag = {};
         const viewData = {};
-        
+
         if (req.session.alert) {
             viewBag.alert = req.session.alert;
             delete req.session.alert;
@@ -885,7 +885,7 @@ router.get('/fields', async (req, res) => {
 
             viewBag.depname = department.Name;
             viewBag.subdepname = subdepartment.Name;
-            
+
             delete req.session.linkid;
             delete req.session.depid;
             delete req.session.subdepid;
@@ -903,11 +903,11 @@ router.get('/fields', async (req, res) => {
 router.get('/load-fields', async (req, res) => {
     try {
         const { depid, subdepid, linkid } = req.query;
-        
+
         req.session.depid = depid;
         req.session.subdepid = subdepid.toString();
         req.session.linkid = linkid.toString();
-        
+
         res.redirect('/allocation/fields');
     } catch (error) {
         console.error('Error in load-fields route:', error);
@@ -921,7 +921,7 @@ router.post('/load-fields', async (req, res) => {
 
         for (let i = -1; i <= 11; i++) {
             let updateData = {};
-            
+
             if (i === -1 || i === 0) {
                 updateData.Description = req.body[`input${i}`];
             } else if (i === 11) {
@@ -943,7 +943,7 @@ router.post('/load-fields', async (req, res) => {
         req.session.depid = depid;
         req.session.subdepid = subdepid.toString();
         req.session.linkid = linkid.toString();
-        
+
         res.redirect('/allocation/fields');
     } catch (error) {
         console.error('Error in load-fields POST route:', error);
@@ -954,13 +954,13 @@ router.post('/load-fields', async (req, res) => {
 router.get('/document-access', async (req, res) => {
     try {
         const { depid, subdepid, userid } = req.query;
-        
-        if (!depid || !subdepid ) {
+
+        if (!depid || !subdepid) {
             return res.status(400).json({ error: 'Missing required parameters' });
         }
 
         const assingedSubDep = await AssignSubdepartment.findOne({
-            where: { DepartmentID: depid, SubDepartmentID: subdepid,UserID:userid, Active: true }
+            where: { DepartmentID: depid, SubDepartmentID: subdepid, UserID: userid, Active: true }
         });
         if (!assingedSubDep) {
             return res.status(404).json({ status: false, message: 'Assigned sub-department not found' });
@@ -1019,7 +1019,7 @@ router.delete('/delete-existing-user', async (req, res) => {
         });
 
         return res.json({
-            status: true,   
+            status: true,
         });
     } catch (error) {
         console.error('Error in delete-existing-user route:', error);
@@ -1043,7 +1043,7 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
             }],
             order: [['FieldNumber', 'ASC']]
         });
-        
+
         // Map response to include FieldID and MasterField clearly
         const mappedFields = fields.map(f => {
             const fieldData = f.toJSON();
@@ -1053,7 +1053,7 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
                 MasterField: fieldData.MasterField?.Field || null
             };
         });
-        
+
         return res.json({ status: true, data: mappedFields });
     } catch (error) {
         console.error('Error fetching available fields:', error);
@@ -1066,34 +1066,34 @@ router.get('/available-fields/:docTypeId/:linkId', async (req, res) => {
 router.get('/fields/:departmentId/:subDepartmentId/:userId', async (req, res) => {
     try {
         const { departmentId, subDepartmentId, userId } = req.params;
-        
+
         // Find the assigned subdepartment to get the LinkID
         // First try with UserID, if not found, try without UserID (shared LinkID)
         let assignedSubDep = await AssignSubdepartment.findOne({
-            where: { 
-                DepartmentID: departmentId, 
-                SubDepartmentID: subDepartmentId, 
+            where: {
+                DepartmentID: departmentId,
+                SubDepartmentID: subDepartmentId,
                 UserID: userId,
-                Active: true 
+                Active: true
             }
         });
-        
+
         // If not found with UserID, try to find any assignment for this dept/subdept
         if (!assignedSubDep) {
             assignedSubDep = await AssignSubdepartment.findOne({
-                where: { 
-                    DepartmentID: departmentId, 
-                    SubDepartmentID: subDepartmentId, 
-                    Active: true 
+                where: {
+                    DepartmentID: departmentId,
+                    SubDepartmentID: subDepartmentId,
+                    Active: true
                 }
             });
         }
-        
+
         if (!assignedSubDep) {
-            return res.json({ 
-                success: true, 
-                data: { 
-                    fields: [], 
+            return res.json({
+                success: true,
+                data: {
+                    fields: [],
                     userPermissions: {
                         View: false,
                         Add: false,
@@ -1106,27 +1106,27 @@ router.get('/fields/:departmentId/:subDepartmentId/:userId', async (req, res) =>
                         Finalize: false,
                         Masking: false
                     }
-                } 
+                }
             });
         }
-        
+
         const linkID = assignedSubDep.LinkID;
-        
+
         // Fetch fields for this LinkID
         const fields = await Fields.findAll({
             where: { LinkID: linkID },
             order: [['FieldNumber', 'ASC']]
         });
-        
+
         // Fetch user permissions for this LinkID and UserID
         const userPermissions = await DocumentAccess.findOne({
-            where: { 
-                LinkID: linkID, 
+            where: {
+                LinkID: linkID,
                 UserID: userId,
-                Active: true 
+                Active: true
             }
         });
-        
+
         // Format permissions (default to false if not found)
         const permissions = userPermissions ? {
             View: userPermissions.View || false,
@@ -1151,7 +1151,7 @@ router.get('/fields/:departmentId/:subDepartmentId/:userId', async (req, res) =>
             Finalize: false,
             Masking: false
         };
-        
+
         return res.json({
             success: true,
             data: {
@@ -1161,10 +1161,10 @@ router.get('/fields/:departmentId/:subDepartmentId/:userId', async (req, res) =>
         });
     } catch (error) {
         console.error('Error fetching fields and permissions:', error);
-        return res.status(500).json({ 
-            success: false, 
+        return res.status(500).json({
+            success: false,
             error: 'Failed to fetch fields and permissions',
-            details: error.message 
+            details: error.message
         });
     }
 });
@@ -1174,12 +1174,12 @@ router.get('/by-link/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { includeInactive } = req.query;
-        
+
         const where = { LinkID: id };
         if (includeInactive !== 'true') {
             where.Active = true;
         }
-        
+
         const allocations = await DocumentAccess.findAll({
             where,
             include: [{
@@ -1188,7 +1188,7 @@ router.get('/by-link/:id', async (req, res) => {
             }],
             order: [['CreatedDate', 'DESC']]
         });
-        
+
         return res.json({ status: true, data: allocations });
     } catch (error) {
         console.error('Error fetching allocations by link:', error);
@@ -1201,30 +1201,30 @@ router.get('/by-dept/:deptId/:subDeptId', async (req, res) => {
     try {
         const { deptId, subDeptId } = req.params;
         const { includeInactive } = req.query;
-        
+
         // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
         const assignedSubDeps = await AssignSubdepartment.findAll({
-            where: { 
-                DepartmentID: deptId, 
-                SubDepartmentID: subDeptId, 
-                Active: true 
+            where: {
+                DepartmentID: deptId,
+                SubDepartmentID: subDeptId,
+                Active: true
             }
         });
-        
+
         if (!assignedSubDeps || assignedSubDeps.length === 0) {
             return res.json({ status: true, data: [] }); // Return empty array if no assignment found
         }
-        
+
         // Get all unique LinkIDs from the assigned subdepartments
         const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
-        
-        const where = { 
+
+        const where = {
             LinkID: { [Op.in]: linkIDs }
         };
         if (includeInactive !== 'true') {
             where.Active = true;
         }
-        
+
         const allocations = await DocumentAccess.findAll({
             where,
             include: [{
@@ -1233,7 +1233,7 @@ router.get('/by-dept/:deptId/:subDeptId', async (req, res) => {
             }],
             order: [['CreatedDate', 'DESC']]
         });
-        
+
         return res.json({ status: true, data: allocations });
     } catch (error) {
         console.error('Error fetching allocations by dept:', error);
@@ -1246,34 +1246,34 @@ router.get('/by-dept', async (req, res) => {
     try {
         const { deptId, subDeptId } = req.query;
         const { includeInactive } = req.query;
-        
+
         if (!deptId || !subDeptId) {
             return res.status(400).json({ status: false, error: 'Missing required parameters: deptId and subDeptId' });
         }
-        
+
         // Find ALL assigned subdepartment records (may have multiple UserIDs with different LinkIDs)
         const assignedSubDeps = await AssignSubdepartment.findAll({
-            where: { 
-                DepartmentID: deptId, 
-                SubDepartmentID: subDeptId, 
-                Active: true 
+            where: {
+                DepartmentID: deptId,
+                SubDepartmentID: subDeptId,
+                Active: true
             }
         });
-        
+
         if (!assignedSubDeps || assignedSubDeps.length === 0) {
             return res.json({ status: true, data: [] }); // Return empty array if no assignment found
         }
-        
+
         // Get all unique LinkIDs from the assigned subdepartments
         const linkIDs = [...new Set(assignedSubDeps.map(item => item.LinkID))];
-        
-        const where = { 
+
+        const where = {
             LinkID: { [Op.in]: linkIDs }
         };
         if (includeInactive !== 'true') {
             where.Active = true;
         }
-        
+
         const allocations = await DocumentAccess.findAll({
             where,
             include: [{
@@ -1282,7 +1282,7 @@ router.get('/by-dept', async (req, res) => {
             }],
             order: [['CreatedDate', 'DESC']]
         });
-        
+
         return res.json({ status: true, data: allocations });
     } catch (error) {
         console.error('Error fetching allocations by dept (query):', error);
@@ -1295,29 +1295,29 @@ router.get('/user/:userId/:deptId/:subDeptId', async (req, res) => {
     try {
         const { userId, deptId, subDeptId } = req.params;
         const { includeInactive } = req.query;
-        
+
         // Find the assigned subdepartment to get the LinkID
         const assignedSubDep = await AssignSubdepartment.findOne({
-            where: { 
-                DepartmentID: deptId, 
-                SubDepartmentID: subDeptId, 
-                Active: true 
+            where: {
+                DepartmentID: deptId,
+                SubDepartmentID: subDeptId,
+                Active: true
             }
         });
-        
+
         if (!assignedSubDep) {
             return res.json({ status: true, data: null }); // Return null if no assignment found
         }
-        
+
         const linkID = assignedSubDep.LinkID;
-        const where = { 
-            LinkID: linkID, 
-            UserID: userId 
+        const where = {
+            LinkID: linkID,
+            UserID: userId
         };
         if (includeInactive !== 'true') {
             where.Active = true;
         }
-        
+
         const allocation = await DocumentAccess.findOne({
             where,
             include: [{
@@ -1325,7 +1325,7 @@ router.get('/user/:userId/:deptId/:subDeptId', async (req, res) => {
                 attributes: ['ID', 'UserName', 'Active']
             }]
         });
-        
+
         return res.json({ status: true, data: allocation });
     } catch (error) {
         console.error('Error fetching allocation by user and dept:', error);
@@ -1337,12 +1337,12 @@ router.get('/user/:userId/:deptId/:subDeptId', async (req, res) => {
 router.get('/all', async (req, res) => {
     try {
         const { includeInactive } = req.query;
-        
+
         const where = {};
         if (includeInactive !== 'true') {
             where.Active = true;
         }
-        
+
         const allocations = await DocumentAccess.findAll({
             where,
             include: [{
@@ -1351,7 +1351,7 @@ router.get('/all', async (req, res) => {
             }],
             order: [['CreatedDate', 'DESC']]
         });
-        
+
         return res.json({ status: true, data: allocations });
     } catch (error) {
         console.error('Error fetching all allocations:', error);
@@ -1384,7 +1384,7 @@ router.put('/update/:id', async (req, res) => {
 
         // DocumentAccess doesn't have an auto-increment ID, so we need LinkID + UserID to identify
         // Try multiple ways to find the allocation:
-        
+
         // 1. If LinkID and UserID are provided in body, use them (most reliable)
         if (LinkID && UserID) {
             allocation = await DocumentAccess.findOne({
@@ -1416,8 +1416,8 @@ router.put('/update/:id', async (req, res) => {
         }
 
         if (!allocation) {
-            return res.status(404).json({ 
-                status: false, 
+            return res.status(404).json({
+                status: false,
                 error: 'Allocation not found',
                 hint: 'Please provide LinkID and UserID in the request body'
             });
@@ -1443,9 +1443,9 @@ router.put('/update/:id', async (req, res) => {
 
         // Fetch the updated allocation with user info
         const updatedAllocation = await DocumentAccess.findOne({
-            where: { 
-                LinkID: allocation.LinkID, 
-                UserID: allocation.UserID 
+            where: {
+                LinkID: allocation.LinkID,
+                UserID: allocation.UserID
             },
             include: [{
                 model: Users,
@@ -1453,10 +1453,10 @@ router.put('/update/:id', async (req, res) => {
             }]
         });
 
-        return res.json({ 
-            status: true, 
+        return res.json({
+            status: true,
             data: updatedAllocation,
-            message: 'Allocation updated successfully' 
+            message: 'Allocation updated successfully'
         });
     } catch (error) {
         console.error('Error updating allocation:', error);
@@ -1471,30 +1471,30 @@ router.get('/role-allocations', requireAuth, async (req, res) => {
     try {
         // Check if model is loaded
         if (!RoleDocumentAccess) {
-            return res.status(500).json({ 
-                status: false, 
-                error: 'RoleDocumentAccess model not loaded. Please check database configuration.' 
+            return res.status(500).json({
+                status: false,
+                error: 'RoleDocumentAccess model not loaded. Please check database configuration.'
             });
         }
 
         console.log('[role-allocations] Model check passed, RoleDocumentAccess:', typeof RoleDocumentAccess);
-        
+
         const { departmentId, subDepartmentId } = req.query;
         console.log('[role-allocations] Request params:', { departmentId, subDepartmentId });
-        
+
         if (!departmentId || !subDepartmentId) {
-            return res.status(400).json({ 
-                status: false, 
-                error: 'Missing required parameters: departmentId and subDepartmentId' 
+            return res.status(400).json({
+                status: false,
+                error: 'Missing required parameters: departmentId and subDepartmentId'
             });
         }
 
         // Find assigned subdepartment to get LinkID
         const assignedSubDep = await AssignSubdepartment.findOne({
-            where: { 
-                DepartmentID: departmentId, 
-                SubDepartmentID: subDepartmentId, 
-                Active: true 
+            where: {
+                DepartmentID: departmentId,
+                SubDepartmentID: subDepartmentId,
+                Active: true
             }
         });
 
@@ -1504,7 +1504,7 @@ router.get('/role-allocations', requireAuth, async (req, res) => {
 
         const linkID = assignedSubDep.LinkID;
         const linkIDStr = String(linkID); // Ensure it's a string
-        
+
         console.log('[role-allocations] Found LinkID:', linkID, 'as string:', linkIDStr);
 
         // Get all role allocations for this LinkID
@@ -1513,9 +1513,9 @@ router.get('/role-allocations', requireAuth, async (req, res) => {
         try {
             console.log('[role-allocations] Attempting query with include...');
             roleAllocations = await RoleDocumentAccess.findAll({
-                where: { 
+                where: {
                     LinkID: linkIDStr,
-                    Active: true 
+                    Active: true
                 },
                 attributes: {
                     exclude: ['id'] // Explicitly exclude 'id' column
@@ -1534,18 +1534,18 @@ router.get('/role-allocations', requireAuth, async (req, res) => {
             console.warn('[role-allocations] Error details:', includeError);
             // Fallback: get without include and manually add UserAccess data
             roleAllocations = await RoleDocumentAccess.findAll({
-                where: { 
+                where: {
                     LinkID: linkIDStr,
-                    Active: true 
+                    Active: true
                 },
                 attributes: {
                     exclude: ['id'] // Explicitly exclude 'id' column
                 },
                 order: [['CreatedDate', 'DESC']]
             });
-            
+
             console.log('[role-allocations] Fallback query successful, found', roleAllocations.length, 'records');
-            
+
             // Manually fetch UserAccess for each role
             for (let allocation of roleAllocations) {
                 try {
@@ -1565,25 +1565,25 @@ router.get('/role-allocations', requireAuth, async (req, res) => {
         console.error('Error fetching role allocations:', error);
         console.error('Error stack:', error.stack);
         console.error('Error name:', error.name);
-        
+
         // Check if table doesn't exist
         if (error.message && (
-            error.message.includes("doesn't exist") || 
+            error.message.includes("doesn't exist") ||
             error.message.includes("Table") && error.message.includes("doesn't exist") ||
             error.message.includes("Unknown table") ||
             error.original && error.original.code === 'ER_NO_SUCH_TABLE'
         )) {
-            return res.status(500).json({ 
-                status: false, 
+            return res.status(500).json({
+                status: false,
                 error: 'RoleDocumentAccess table does not exist in database',
                 details: 'Please run the SQL migration file: migrations/create_role_document_access_table.sql',
                 hint: 'The table needs to be created before using role-based allocations'
             });
         }
-        
-        return res.status(500).json({ 
-            status: false, 
-            error: 'Failed to fetch role allocations', 
+
+        return res.status(500).json({
+            status: false,
+            error: 'Failed to fetch role allocations',
             details: error.message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
@@ -1595,9 +1595,9 @@ router.get('/role-allocations/:linkId', requireAuth, async (req, res) => {
     try {
         // Check if model is loaded
         if (!RoleDocumentAccess) {
-            return res.status(500).json({ 
-                status: false, 
-                error: 'RoleDocumentAccess model not loaded. Please check database configuration.' 
+            return res.status(500).json({
+                status: false,
+                error: 'RoleDocumentAccess model not loaded. Please check database configuration.'
             });
         }
 
@@ -1636,7 +1636,7 @@ router.get('/role-allocations/:linkId', requireAuth, async (req, res) => {
                 },
                 order: [['CreatedDate', 'DESC']]
             });
-            
+
             // Manually fetch UserAccess for each role
             for (let allocation of roleAllocations) {
                 const userAccess = await UserAccess.findByPk(allocation.UserAccessID, {
@@ -1651,25 +1651,25 @@ router.get('/role-allocations/:linkId', requireAuth, async (req, res) => {
         console.error('Error fetching role allocations by link:', error);
         console.error('Error stack:', error.stack);
         console.error('Error name:', error.name);
-        
+
         // Check if table doesn't exist
         if (error.message && (
-            error.message.includes("doesn't exist") || 
+            error.message.includes("doesn't exist") ||
             error.message.includes("Table") && error.message.includes("doesn't exist") ||
             error.message.includes("Unknown table") ||
             error.original && error.original.code === 'ER_NO_SUCH_TABLE'
         )) {
-            return res.status(500).json({ 
-                status: false, 
+            return res.status(500).json({
+                status: false,
                 error: 'RoleDocumentAccess table does not exist in database',
                 details: 'Please run the SQL migration file: migrations/create_role_document_access_table.sql',
                 hint: 'The table needs to be created before using role-based allocations'
             });
         }
-        
-        return res.status(500).json({ 
-            status: false, 
-            error: 'Failed to fetch role allocations', 
+
+        return res.status(500).json({
+            status: false,
+            error: 'Failed to fetch role allocations',
             details: error.message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
@@ -1682,14 +1682,14 @@ router.get('/add-role', requireAuth, async (req, res) => {
         const { linkid, subdepid, depid, useraccessid = 0 } = req.query;
 
         if (!linkid || !subdepid || !depid) {
-            return res.status(400).json({ 
-                status: false, 
-                error: 'Missing required parameters: linkid, subdepid, depid' 
+            return res.status(400).json({
+                status: false,
+                error: 'Missing required parameters: linkid, subdepid, depid'
             });
         }
 
         // Get all active user access (roles)
-        const userAccessList = await UserAccess.findAll({ 
+        const userAccessList = await UserAccess.findAll({
             where: { Active: true },
             order: [['Description', 'ASC']]
         });
@@ -1701,7 +1701,7 @@ router.get('/add-role', requireAuth, async (req, res) => {
         });
 
         // Filter out roles that already have allocations
-        const availableRoles = userAccessList.filter(role => 
+        const availableRoles = userAccessList.filter(role =>
             !existingRoleAllocations.some(alloc => alloc.UserAccessID === role.ID)
         );
 
@@ -1732,7 +1732,7 @@ router.post('/add-role', requireAuth, async (req, res) => {
         console.log('=== add-role POST request received ===');
         console.log('Request body:', JSON.stringify(req.body, null, 2));
         console.log('User from auth:', req.user);
-        
+
         const {
             depid, subdepid, useraccessid, linkid,
             View = false, Add = false, Edit = false,
@@ -1744,10 +1744,10 @@ router.post('/add-role', requireAuth, async (req, res) => {
         // Validate required fields
         if (!depid || !subdepid || !useraccessid || !linkid) {
             console.error('Missing required fields:', { depid, subdepid, useraccessid, linkid });
-            return res.status(400).json({ 
+            return res.status(400).json({
                 status: false,
-                error: 'Missing required fields', 
-                details: 'depid, subdepid, useraccessid, and linkid are required' 
+                error: 'Missing required fields',
+                details: 'depid, subdepid, useraccessid, and linkid are required'
             });
         }
 
@@ -1757,9 +1757,9 @@ router.post('/add-role', requireAuth, async (req, res) => {
 
         // Check if role allocation already exists
         const existing = await RoleDocumentAccess.findOne({
-            where: { 
-                LinkID: linkid, 
-                UserAccessID: useraccessid 
+            where: {
+                LinkID: linkid,
+                UserAccessID: useraccessid
             },
             attributes: { exclude: ['id'] }
         });
@@ -1841,10 +1841,10 @@ router.post('/add-role', requireAuth, async (req, res) => {
     } catch (error) {
         console.error('Error in add-role POST route:', error);
         console.error('Error stack:', error.stack);
-        return res.status(500).json({ 
+        return res.status(500).json({
             status: false,
-            error: 'Internal server error', 
-            details: error.message 
+            error: 'Internal server error',
+            details: error.message
         });
     }
 });
@@ -1855,16 +1855,16 @@ router.get('/edit-role', requireAuth, async (req, res) => {
         const { linkid, useraccessid } = req.query;
 
         if (!linkid || !useraccessid) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 status: false,
-                error: 'Missing required parameters: linkid and useraccessid' 
+                error: 'Missing required parameters: linkid and useraccessid'
             });
         }
 
         const roleAllocation = await RoleDocumentAccess.findOne({
-            where: { 
-                LinkID: linkid, 
-                UserAccessID: useraccessid 
+            where: {
+                LinkID: linkid,
+                UserAccessID: useraccessid
             },
             attributes: { exclude: ['id'] },
             include: [{
@@ -1875,9 +1875,9 @@ router.get('/edit-role', requireAuth, async (req, res) => {
         });
 
         if (!roleAllocation) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 status: false,
-                error: 'Role allocation not found' 
+                error: 'Role allocation not found'
             });
         }
 
@@ -1897,9 +1897,9 @@ router.put('/update-role', requireAuth, async (req, res) => {
         const { linkid, useraccessid, View, Add, Edit, Delete, Print, Confidential, Comment, Collaborate, Finalize, Masking, Active, fields } = req.body;
 
         if (!linkid || !useraccessid) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 status: false,
-                error: 'Missing required fields: linkid and useraccessid' 
+                error: 'Missing required fields: linkid and useraccessid'
             });
         }
 
@@ -1909,9 +1909,9 @@ router.put('/update-role', requireAuth, async (req, res) => {
         });
 
         if (!roleAllocation) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 status: false,
-                error: 'Role allocation not found' 
+                error: 'Role allocation not found'
             });
         }
 
@@ -1941,10 +1941,10 @@ router.put('/update-role', requireAuth, async (req, res) => {
             }]
         });
 
-        return res.json({ 
-            status: true, 
+        return res.json({
+            status: true,
             data: updatedAllocation,
-            message: 'Role allocation updated successfully' 
+            message: 'Role allocation updated successfully'
         });
     } catch (error) {
         console.error('Error updating role allocation:', error);
@@ -1958,9 +1958,9 @@ router.delete('/delete-role', requireAuth, async (req, res) => {
         const { linkid, useraccessid } = req.query;
 
         if (!linkid || !useraccessid) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 status: false,
-                error: 'Missing required parameters: linkid and useraccessid' 
+                error: 'Missing required parameters: linkid and useraccessid'
             });
         }
 
@@ -1970,17 +1970,17 @@ router.delete('/delete-role', requireAuth, async (req, res) => {
         });
 
         if (!roleAllocation) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 status: false,
-                error: 'Role allocation not found' 
+                error: 'Role allocation not found'
             });
         }
 
         await roleAllocation.update({ Active: false });
 
-        return res.json({ 
+        return res.json({
             status: true,
-            message: 'Role allocation deleted successfully' 
+            message: 'Role allocation deleted successfully'
         });
     } catch (error) {
         console.error('Error deleting role allocation:', error);
@@ -2005,9 +2005,9 @@ router.get('/users-by-role/:useraccessid', requireAuth, async (req, res) => {
             attributes: ['ID', 'UserName', 'Active']
         });
 
-        return res.json({ 
-            status: true, 
-            data: users 
+        return res.json({
+            status: true,
+            data: users
         });
     } catch (error) {
         console.error('Error fetching users by role:', error);

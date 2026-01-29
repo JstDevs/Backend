@@ -4803,4 +4803,67 @@ router.get('/activities-dashboard', requireAuth, async (req, res) => {
 });
 
 
+// MOVE a document to a different department/subdepartment
+router.patch('/:id/move', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { departmentId, subDepartmentId } = req.body;
+
+    if (!departmentId || !subDepartmentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Department and Sub-Department IDs are required.'
+      });
+    }
+
+    const document = await db.Documents.findByPk(id);
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found.'
+      });
+    }
+
+    const oldDeptId = document.DepartmentId;
+    const oldSubDeptId = document.SubDepartmentId;
+
+    // Update all historical records for this document to the new department/subdepartment
+    // This ensures consistency across versions
+    await db.Documents.update(
+      {
+        DepartmentId: parseInt(departmentId),
+        SubDepartmentId: parseInt(subDepartmentId)
+      },
+      { where: { LinkID: document.LinkID } }
+    );
+
+    // Log audit trail
+    await logAuditTrail(
+      id,
+      'DOCUMENT_MOVED',
+      req.user.id,
+      JSON.stringify({ departmentId: oldDeptId, subDepartmentId: oldSubDeptId }),
+      JSON.stringify({ departmentId, subDepartmentId }),
+      req,
+      document.LinkID
+    );
+
+    // Fetch the updated document to return
+    const updatedDocument = await db.Documents.findByPk(id);
+
+    res.json({
+      success: true,
+      message: 'Document moved successfully.',
+      document: updatedDocument
+    });
+  } catch (error) {
+    console.error('Error moving document:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to move document.',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
